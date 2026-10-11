@@ -129,12 +129,6 @@ export function startApp(root: HTMLElement): void {
         </div>
         <div class="debt-note" id="h-debt"></div>
         <div class="toolbar" id="toolbar"></div>
-        <div class="keys" id="h-keys" hidden>
-          <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>走</span>
-          <span><kbd>Shift</kbd>跑</span>
-          <span><kbd>E</kbd>动作</span>
-          <span><kbd>Tab</kbd>马厩</span>
-        </div>
       </div>
       <div class="event-bar" id="event-bar" hidden>
         <button class="chip-btn" data-speed="1">1×</button>
@@ -167,14 +161,14 @@ export function startApp(root: HTMLElement): void {
     lastSave = performance.now();
   };
 
-  const toast = (text: string): void => {
+  const toast = (text: string, ms = 2400): void => {
     const t = $<HTMLDivElement>("#toast");
     t.textContent = text;
     t.classList.remove("show");
     void t.offsetWidth;
     t.classList.add("show");
     clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(() => t.classList.remove("show"), 2400);
+    toastTimer = window.setTimeout(() => t.classList.remove("show"), ms);
   };
 
   const world = new WorldScene(worldCanvas, game, {
@@ -1073,7 +1067,7 @@ export function startApp(root: HTMLElement): void {
       {
         keys: () => {
           closePanel();
-          showKeys(8000);
+          toast(HOW_TO, 5000);
         },
         reset: () => {
           if (!confirmReset) {
@@ -1092,13 +1086,8 @@ export function startApp(root: HTMLElement): void {
     );
   };
 
-  let keysTimer = 0;
-  const showKeys = (ms: number): void => {
-    const keys = $("#h-keys");
-    keys.hidden = false;
-    clearTimeout(keysTimer);
-    keysTimer = window.setTimeout(() => (keys.hidden = true), ms);
-  };
+  /** 新手提示只在开场信之后说一句。 */
+  const HOW_TO = "WASD 走动　E 互动　Tab 马厩";
 
   const intro = (): void => {
     if (game.flags.intro) return;
@@ -1116,7 +1105,7 @@ export function startApp(root: HTMLElement): void {
         onClose: () => {
           game.flags.intro = true;
           persist();
-          showKeys(12000);
+          toast(HOW_TO, 6000);
         },
       },
     );
@@ -1165,6 +1154,5 @@ export function startApp(root: HTMLElement): void {
     showRuined({ day: game.day - 1, ledger: [], foals: [], sequenced: [], grownUp: [], debtPaid: 0, ruined: true });
   } else {
     intro();
-    if (game.flags.intro && game.day <= 2) showKeys(8000);
   }
 }

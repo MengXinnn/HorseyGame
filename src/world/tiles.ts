@@ -244,7 +244,21 @@ export type PropKind =
   | "barrel"
   | "crate"
   | "well"
-  | "stall";
+  | "stall"
+  | "crops"
+  | "hay"
+  | "trough"
+  | "mailbox"
+  | "woodpile"
+  | "signpost"
+  | "lily"
+  | "mushroom"
+  | "log"
+  | "grass"
+  | "flowers"
+  | "cart"
+  | "statue"
+  | "bench";
 
 export interface Prop {
   kind: PropKind;
@@ -330,6 +344,17 @@ function buildProps(): Prop[] {
   ] as const)
     put("stall", x, 26.6, v);
   put("well", 66.5, 19.8, 0);
+  // 广场西边立着一匹铜马，旁边几条长凳。
+  put("statue", 49.5, 20.8, 0);
+  for (const [x, z] of [
+    [46.5, 17.8],
+    [52.5, 17.8],
+    [46.5, 24.6],
+    [52.5, 24.6],
+    [64.5, 23.8],
+    [69.5, 23.8],
+  ] as const)
+    put("bench", x, z, 0);
   put("oak", 44.5, 20.9, 1);
   put("oak", 73.5, 21.9, 2);
   for (const [k, x, z] of [
@@ -343,6 +368,42 @@ function buildProps(): Prop[] {
     ["crate", 21.2, 48.8],
   ] as const)
     put(k, x, z, rng.int(0, 3));
+  // 家门口：菜地、信箱、柴堆。
+  for (let z = 52; z <= 54; z++) for (let x = 3; x <= 8; x++) put("crops", x + 0.5, z + 0.95, (z - 52 + (x > 5 ? 2 : 0)) % 4);
+  put("mailbox", 17.5, 49.9, 0);
+  put("woodpile", 8.4, 47.9, 0);
+  // 马厩东边：草垛和板车。
+  put("hay", 35.5, 45.9, 0);
+  put("hay", 37.0, 46.7, 1);
+  put("hay", 35.4, 47.6, 2);
+  put("cart", 39.5, 47.9, 0);
+  // 牧场里的水槽。
+  put("trough", 12.5, 58.9, 0);
+  put("trough", 24.5, 66.9, 0);
+  // 路牌。
+  put("signpost", 33.6, 49.9, 0);
+  put("signpost", 34.6, 27.9, 1);
+  put("signpost", 72.6, 41.9, 2);
+  // 东边一片果园。
+  for (let z = 27; z <= 33; z += 3) for (let x = 78; x <= 91; x += 3) put("oak", x + 0.5 + ((z / 3) % 2), z + 0.9, 2);
+  // 水面上的睡莲，野地里的蘑菇、倒木、高草和花丛。
+  for (let z = 1; z < MAP_H - 1; z++)
+    for (let x = 1; x < MAP_W - 1; x++) {
+      const k = tileAt(x, z);
+      const r = rng.next();
+      if (k === T.water) {
+        if (r < 0.05) put("lily", x + 0.5, z + 0.7, rng.int(0, 2));
+        continue;
+      }
+      if (!clearAt(x, z)) continue;
+      const wild = inRect(WILDS, x, z);
+      if (r < (wild ? 0.07 : 0.03)) put("grass", x + 0.5, z + 0.85, rng.int(0, 2));
+      else if (r < (wild ? 0.1 : 0.045)) put("flowers", x + 0.5, z + 0.8, rng.int(0, 3));
+      else if (r < (wild ? 0.11 : 0.05)) put("mushroom", x + 0.5, z + 0.7, rng.int(0, 1));
+    }
+  put("log", 58.5, 70.8, 0);
+  put("log", 86.5, 48.8, 0);
+  put("log", 12.5, 32.8, 0);
   put("lantern", 20.5, 49.8);
   put("lantern", 9.5, 49.8);
   // 赛马场的彩旗。
@@ -355,9 +416,9 @@ function buildProps(): Prop[] {
 
 export const PROPS = buildProps();
 
-const SOLID_PROPS = new Set<PropKind>(["pine", "oak", "rock", "lantern", "stump", "board", "flag", "planter", "barrel", "crate", "well", "stall"]);
+const SOLID_PROPS = new Set<PropKind>(["pine", "oak", "rock", "lantern", "stump", "board", "flag", "planter", "barrel", "crate", "well", "stall", "hay", "trough", "mailbox", "woodpile", "signpost", "log", "cart", "statue", "bench"]);
 /** 占地不止一格的摆设，左右各多挡几格。 */
-const WIDE: Partial<Record<PropKind, number>> = { stall: 1, well: 0 };
+const WIDE: Partial<Record<PropKind, number>> = { stall: 1, well: 0, trough: 1, cart: 1, log: 1, statue: 1, bench: 1 };
 const PROP_BLOCK = new Set(
   PROPS.filter((p) => SOLID_PROPS.has(p.kind)).flatMap((p) => {
     const r = WIDE[p.kind] ?? 0;

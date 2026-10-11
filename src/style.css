@@ -550,42 +550,6 @@ button.tslot:hover {
   box-shadow: var(--u) 0 0 #f0a850;
 }
 
-.keys {
-  position: absolute;
-  left: 50%;
-  bottom: calc(var(--u) * 42);
-  transform: translateX(-50%);
-  display: flex;
-  gap: calc(var(--u) * 5);
-  padding: 0 calc(var(--u) * 3);
-  font-size: var(--fs-s);
-  white-space: nowrap;
-  border: solid transparent;
-  border-width: calc(var(--u) * 3);
-  border-image: var(--f-paper) 4 fill / calc(var(--u) * 4) / 0 stretch;
-  image-rendering: pixelated;
-}
-
-.keys span {
-  display: flex;
-  align-items: center;
-  gap: var(--u);
-}
-
-kbd {
-  display: inline-grid;
-  place-items: center;
-  min-width: calc(var(--u) * 7);
-  height: calc(var(--u) * 7);
-  padding: 0 var(--u);
-  font-family: inherit;
-  font-size: var(--fs-s);
-  line-height: 1;
-  background: var(--cream);
-  box-shadow: 0 0 0 var(--u) var(--ink), 0 var(--u) 0 var(--u) var(--ink);
-  margin: 0 calc(var(--u) * 0.5) var(--u);
-}
-
 /* ---------------- 赛场底部的速度按钮 ---------------- */
 
 .event-bar {
@@ -859,8 +823,7 @@ button.hcard:hover:not([disabled]),
   color: var(--ink);
 }
 
-.game:has(.talk:not([hidden])) .toolbar,
-.game:has(.talk:not([hidden])) .keys {
+.game:has(.talk:not([hidden])) .toolbar {
   display: none;
 }
 

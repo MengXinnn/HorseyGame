@@ -40,6 +40,7 @@ import {
   type PersonLook,
 } from "./sprites";
 import { HorsePuppet } from "./puppet";
+import { Ambient, drawChimney } from "./ambient";
 
 export interface WorldHooks {
   onInteract(id: InteractId): void;
@@ -157,6 +158,7 @@ export class WorldScene {
   private holding = false;
   private float: Array<{ text: string; x: number; z: number; t: number; color: string }> = [];
   private zoom = 3;
+  private readonly ambient = new Ambient();
   private camX = 0;
   private camY = 0;
   private raf = 0;
@@ -320,6 +322,12 @@ export class WorldScene {
     this.updateHerd(dt);
     this.tiedun?.update(dt);
     this.updateLasso(dt);
+    this.ambient.update(dt, { cx: this.camX, cy: this.camY, bw: this.buf.width, bh: this.buf.height }, s.clock, {
+      x: s.player.x,
+      z: s.player.z,
+      running: this.running,
+      moving: this.moving,
+    });
     for (const f of this.float) f.t += dt;
     this.float = this.float.filter((f) => f.t < 1.6);
     if (this.banner) {
@@ -605,7 +613,13 @@ export class WorldScene {
       const ox = bd.x * TILE;
       const oy = (bd.z + bd.d) * TILE;
       if (!visible(ox + (bd.w * TILE) / 2, oy, bd.w * TILE)) continue;
-      items.push({ y: oy, draw: () => b.drawImage(sp.img, ox - sp.ax - cx, oy - sp.ay - cy) });
+      items.push({
+        y: oy,
+        draw: () => {
+          b.drawImage(sp.img, ox - sp.ax - cx, oy - sp.ay - cy);
+          drawChimney(b, bd, cx, cy);
+        },
+      });
       for (const [lx, ly] of sp.lights) lights.push([ox + lx - cx, oy + ly - cy, 22]);
     }
     for (const p of PROPS) {
@@ -614,13 +628,22 @@ export class WorldScene {
       if (!visible(x, y, 40)) continue;
       const sp = propSprite(p);
       const tree = p.kind === "pine" || p.kind === "oak";
+      const sways = tree || p.kind === "sunflower" || p.kind === "grass" || p.kind === "reeds";
       items.push({
         y,
         draw: () => {
           if (tree || p.kind === "bush" || p.kind === "rock") shadow(b, x - cx, y - cy, tree ? 9 : 5);
           // 人走到树后面时，树变半透明。
           if (tree && pz < y && pz > y - sp.img.height + 6 && Math.abs(px - x) < sp.img.width / 2) b.globalAlpha = 0.5;
-          b.drawImage(sp.img, Math.round(x - sp.ax - cx), Math.round(y - sp.ay - cy));
+          const sx = Math.round(x - sp.ax - cx);
+          const sy = Math.round(y - sp.ay - cy);
+          if (p.kind === "flag") drawFlag(b, sp.img, sx, sy, this.time + p.v);
+          else if (sways) {
+            // 风吹过来，树冠和草尖左右晃一个像素；人从草边走过时晃得多。
+            const brush = !tree && Math.hypot(px - x, pz - y) < 10 && this.moving ? 2 : 1;
+            const dx = Math.round(Math.sin(this.time * (tree ? 1.3 : 2.2) + p.x * 0.7 + p.z * 0.3) * 0.9 * brush);
+            drawSway(b, sp.img, sx, sy, dx, tree ? 0.62 : 0.5);
+          } else b.drawImage(sp.img, sx, sy);
           b.globalAlpha = 1;
         },
       });
@@ -700,8 +723,11 @@ export class WorldScene {
       },
     });
 
+    const view = { cx, cy, bw, bh };
+    this.ambient.collect(items, b, view, shadow);
     items.sort((a, c) => a.y - c.y);
     for (const it of items) it.draw();
+    this.ambient.drawAbove(b, view);
 
     // 昼夜：整体乘一层颜色，夜里点灯。
     const grade = gradeAt(s.clock);
@@ -713,7 +739,9 @@ export class WorldScene {
     }
     if (grade.night > 0.2) {
       b.globalCompositeOperation = "lighter";
-      for (const [x, y, r] of lights) {
+      for (const [x, y, r0] of lights) {
+        // 灯笼的火苗一闪一闪。
+        const r = r0 === 30 ? r0 + Math.round(Math.sin(this.time * 9 + x) * 1.5 + Math.sin(this.time * 23 + y)) : r0;
         if (x < -r || y < -r || x > bw + r || y > bh + r) continue;
         const g = b.createRadialGradient(x, y, 0, x, y, r);
         g.addColorStop(0, `rgba(255,180,90,${0.55 * grade.night})`);
@@ -725,6 +753,7 @@ export class WorldScene {
       b.fillStyle = `rgba(255,214,120,${Math.min(1, grade.night)})`;
       for (const [x, y, r] of lights) if (r === 22) b.fillRect(Math.round(x - 3), Math.round(y - 3), 6, 6);
     }
+    this.ambient.drawNight(b, view, grade.night);
 
     this.drawOverlay(b, cx, cy, bw, bh);
 
@@ -853,6 +882,26 @@ function drawFence(b: CanvasRenderingContext2D, x: number, y: number, horizontal
     b.fillStyle = "#a8733f";
     b.fillRect(x, y - 10, 3, TILE + 1);
     post(x, y + TILE);
+  }
+}
+
+/** 上半截（树冠、草尖）错开 dx 个像素，下半截不动。 */
+function drawSway(b: CanvasRenderingContext2D, img: HTMLCanvasElement, x: number, y: number, dx: number, split: number): void {
+  if (dx === 0) {
+    b.drawImage(img, x, y);
+    return;
+  }
+  const cut = Math.round(img.height * split);
+  b.drawImage(img, 0, 0, img.width, cut, x + dx, y, img.width, cut);
+  b.drawImage(img, 0, cut, img.width, img.height - cut, x, y + cut, img.width, img.height - cut);
+}
+
+/** 旗子：旗杆不动，旗面一列一列上下起伏。 */
+function drawFlag(b: CanvasRenderingContext2D, img: HTMLCanvasElement, x: number, y: number, t: number): void {
+  b.drawImage(img, 0, 0, 4, img.height, x, y, 4, img.height);
+  for (let col = 4; col < img.width; col++) {
+    const off = Math.round(Math.sin(t * 6 - col * 0.7) * ((col - 3) / 6));
+    b.drawImage(img, col, 0, 1, 14, x + col, y + off, 1, 14);
   }
 }
 

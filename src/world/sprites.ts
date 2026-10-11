@@ -681,6 +681,312 @@ function stall(v: number): Sprite {
   );
 }
 
+const CROPS = [
+  { leaf: "#5aa848", dark: "#3f8a3a", fruit: "#b8e070" },
+  { leaf: "#6cbf4a", dark: "#3f8a3a", fruit: "#f08a2a" },
+  { leaf: "#7cbf3a", dark: "#4f8f30", fruit: "#f6d05a" },
+  { leaf: "#4f9a3a", dark: "#356a2c", fruit: "#e8782a" },
+];
+
+/** 菜地一格：翻过的土垄上长着菜。 */
+function crops(v: number): Sprite {
+  const c = CROPS[v % 4]!;
+  return sprite(16, 18, 8, 17, (ctx) => {
+    px(ctx, 0, 6, "#7a4a2a", 16, 11);
+    px(ctx, 0, 6, "#8f5a34", 16, 2);
+    px(ctx, 0, 11, "#6a3e22", 16, 1);
+    px(ctx, 0, 15, "#5e3620", 16, 2);
+    for (let i = 0; i < 5; i++) px(ctx, 1 + i * 3, 8 + (i % 2) * 4, "#a06a40");
+    if (v % 4 === 0) {
+      // 白菜
+      blob(ctx, 8, 9, 4, c.dark);
+      blob(ctx, 8, 8, 3, c.leaf);
+      px(ctx, 7, 7, c.fruit, 2, 2);
+    } else if (v % 4 === 1) {
+      // 胡萝卜缨子
+      for (const x of [4, 8, 12]) {
+        px(ctx, x, 11, c.fruit, 2, 1);
+        px(ctx, x - 1, 5, c.leaf, 1, 6);
+        px(ctx, x + 1, 4, c.dark, 1, 7);
+        px(ctx, x + 2, 6, c.leaf, 1, 5);
+      }
+    } else if (v % 4 === 2) {
+      // 玉米
+      for (const x of [4, 11]) {
+        px(ctx, x, 0, c.leaf, 2, 13);
+        px(ctx, x - 2, 5, c.dark, 2, 1);
+        px(ctx, x + 2, 7, c.dark, 2, 1);
+        px(ctx, x + 2, 3, c.fruit, 2, 4);
+      }
+    } else {
+      // 南瓜
+      blob(ctx, 8, 11, 4, c.fruit, 0.75);
+      px(ctx, 6, 9, "#f6a24a", 1, 4);
+      px(ctx, 10, 9, "#c85a1a", 1, 4);
+      px(ctx, 8, 6, c.dark, 1, 3);
+      px(ctx, 9, 6, c.leaf, 3, 2);
+    }
+  });
+}
+
+function hay(v: number): Sprite {
+  return sprite(
+    20,
+    18,
+    10,
+    16,
+    (ctx) => {
+      px(ctx, 1, 5, "#d8b048", 18, 11);
+      px(ctx, 2, 3, "#e8c45a", 16, 3);
+      px(ctx, 1, 5, "#f2d878", 18, 2);
+      px(ctx, 1, 13, "#b08a30", 18, 3);
+      px(ctx, 5, 3, "#8a5a2a", 1, 13);
+      px(ctx, 14, 3, "#8a5a2a", 1, 13);
+      for (let i = 0; i < 7; i++) px(ctx, 2 + ((i * 7 + v * 3) % 15), 7 + ((i * 3) % 6), "#b89036", 2, 1);
+    },
+    "#3b2410",
+  );
+}
+
+function trough(): Sprite {
+  return sprite(
+    36,
+    14,
+    18,
+    12,
+    (ctx) => {
+      px(ctx, 1, 3, "#8a5a32", 34, 8);
+      px(ctx, 1, 3, "#a8733f", 34, 2);
+      px(ctx, 3, 4, "#3f8bd0", 30, 3);
+      px(ctx, 5, 4, "#9fd0f0", 6, 1);
+      px(ctx, 2, 11, "#5e3d24", 3, 2);
+      px(ctx, 31, 11, "#5e3d24", 3, 2);
+      px(ctx, 1, 8, "#6a4024", 34, 1);
+    },
+    "#2a1a12",
+  );
+}
+
+function mailbox(): Sprite {
+  return sprite(
+    12,
+    22,
+    6,
+    20,
+    (ctx) => {
+      px(ctx, 5, 9, "#5e3d24", 2, 12);
+      px(ctx, 1, 3, "#c9302a", 10, 7);
+      px(ctx, 2, 2, "#e8574a", 8, 1);
+      px(ctx, 1, 3, "#e8574a", 10, 1);
+      px(ctx, 2, 5, "#8e2519", 1, 4);
+      px(ctx, 9, 0, "#5a4632", 1, 5);
+      px(ctx, 10, 0, "#f6d05a", 2, 2);
+    },
+    "#2a1a12",
+  );
+}
+
+function woodpile(): Sprite {
+  return sprite(
+    20,
+    16,
+    10,
+    14,
+    (ctx) => {
+      for (let r = 0; r < 3; r++)
+        for (let i = 0; i < 4 - r; i++) {
+          const x = 2 + i * 4 + r * 2;
+          const y = 10 - r * 4;
+          blob(ctx, x + 1, y + 1, 2, "#8a5a32");
+          px(ctx, x, y, "#d8a868", 2, 2);
+          px(ctx, x + 1, y + 1, "#b07a46");
+        }
+    },
+    "#2a1a12",
+  );
+}
+
+const SIGNS = ["镇", "场", "野"];
+function signpost(v: number): Sprite {
+  return sprite(
+    22,
+    26,
+    11,
+    24,
+    (ctx) => {
+      px(ctx, 10, 6, "#5e3d24", 2, 18);
+      px(ctx, 2, 3, "#a8733f", 16, 8);
+      px(ctx, 18, 4, "#a8733f", 2, 6);
+      px(ctx, 20, 5, "#a8733f", 1, 4);
+      px(ctx, 2, 3, "#c99a5a", 16, 1);
+      px(ctx, 2, 10, "#7a4a24", 18, 1);
+      ctx.drawImage(textSprite(SIGNS[v % 3]!, "#3b1c0e"), 4, 0);
+    },
+    "#2a1a12",
+  );
+}
+
+function lily(v: number): Sprite {
+  return sprite(12, 8, 6, 6, (ctx) => {
+    blob(ctx, 5, 4, 3, "#4f9a3a", 0.6);
+    px(ctx, 5, 3, "#3f8bd0", 2, 1);
+    px(ctx, 4, 3, "#6cbf4a", 1, 1);
+    if (v === 1) {
+      px(ctx, 7, 2, "#f6b8c8", 2, 2);
+      px(ctx, 8, 1, "#ffffff");
+    }
+  });
+}
+
+function mushroom(v: number): Sprite {
+  const cap = v ? "#c9302a" : "#c8925a";
+  return sprite(
+    12,
+    10,
+    6,
+    9,
+    (ctx) => {
+      px(ctx, 3, 5, "#f4ead2", 2, 4);
+      px(ctx, 1, 3, cap, 6, 3);
+      px(ctx, 2, 2, cap, 4, 1);
+      if (v) px(ctx, 3, 3, "#ffffff", 1, 1);
+      px(ctx, 8, 6, "#f4ead2", 1, 3);
+      px(ctx, 7, 5, cap, 3, 2);
+    },
+    "#2a1a12",
+  );
+}
+
+function log(): Sprite {
+  return sprite(
+    36,
+    14,
+    18,
+    12,
+    (ctx) => {
+      px(ctx, 3, 3, "#7a4a2a", 30, 8);
+      px(ctx, 3, 3, "#9a6232", 30, 2);
+      px(ctx, 3, 9, "#5e3620", 30, 2);
+      blob(ctx, 3, 7, 4, "#c99a62");
+      blob(ctx, 3, 7, 2, "#a8733f");
+      px(ctx, 14, 2, "#4f9a3a", 4, 2);
+      px(ctx, 22, 1, "#5aa848", 2, 3);
+      for (const x of [10, 18, 26]) px(ctx, x, 6, "#5e3620", 3, 1);
+    },
+    "#2a1a12",
+  );
+}
+
+function tallGrass(v: number): Sprite {
+  return sprite(16, 14, 8, 13, (ctx) => {
+    const n = 5 + v;
+    for (let i = 0; i < n; i++) {
+      const x = 2 + ((i * 5 + v) % 12);
+      const h = 6 + ((i * 3) % 6);
+      px(ctx, x, 13 - h, i % 2 ? "#4f8f30" : "#6cbf4a", 1, h);
+      px(ctx, x + 1, 13 - h + 2, "#3f7a2a", 1, h - 2);
+    }
+  });
+}
+
+function flowerPatch(v: number): Sprite {
+  const c = FLOWERS[v % FLOWERS.length] as string;
+  return sprite(16, 12, 8, 10, (ctx) => {
+    for (const [x, y] of [
+      [3, 6],
+      [8, 4],
+      [12, 7],
+      [6, 9],
+      [10, 10],
+    ] as const) {
+      px(ctx, x, y + 1, "#4f8f30", 1, 2);
+      px(ctx, x - 1, y, c);
+      px(ctx, x + 1, y, c);
+      px(ctx, x, y - 1, c);
+      px(ctx, x, y, "#f2a93b");
+    }
+  });
+}
+
+function cart(): Sprite {
+  return sprite(
+    40,
+    24,
+    20,
+    22,
+    (ctx) => {
+      px(ctx, 4, 6, "#a8733f", 26, 9);
+      px(ctx, 4, 6, "#c99a5a", 26, 2);
+      for (const x of [10, 17, 24]) px(ctx, x, 8, "#7a4a24", 1, 7);
+      px(ctx, 30, 11, "#7a4a24", 9, 2);
+      blob(ctx, 10, 17, 4, "#5e3d24");
+      blob(ctx, 10, 17, 2, "#a8733f");
+      blob(ctx, 24, 17, 4, "#5e3d24");
+      blob(ctx, 24, 17, 2, "#a8733f");
+      blob(ctx, 14, 5, 4, "#e8c45a", 0.6);
+      blob(ctx, 21, 5, 3, "#d8b048", 0.6);
+    },
+    "#2a1a12",
+  );
+}
+
+/** 铜马像：石座上一匹扬蹄的马。 */
+function statue(): Sprite {
+  return sprite(
+    40,
+    52,
+    20,
+    50,
+    (ctx) => {
+      // 石座
+      px(ctx, 6, 34, "#9a9284", 28, 15);
+      px(ctx, 6, 34, "#c6bdad", 28, 3);
+      px(ctx, 4, 45, "#8a8274", 32, 4);
+      px(ctx, 4, 45, "#b0a898", 32, 1);
+      px(ctx, 12, 39, "#7a7264", 16, 4);
+      px(ctx, 13, 40, "#f2c14e", 14, 2);
+      // 马：身子、后腿站立、前腿扬起、脖子和头、尾巴
+      const c = "#6a8a6a";
+      const d = "#4a6a52";
+      const l = "#8fb08a";
+      px(ctx, 12, 18, c, 15, 8);
+      px(ctx, 12, 18, l, 15, 2);
+      px(ctx, 13, 26, d, 3, 8);
+      px(ctx, 22, 26, d, 3, 8);
+      px(ctx, 25, 12, c, 4, 8);
+      px(ctx, 27, 8, c, 6, 5);
+      px(ctx, 32, 9, d, 2, 3);
+      px(ctx, 28, 6, d, 2, 2);
+      px(ctx, 24, 9, d, 2, 9);
+      px(ctx, 28, 20, c, 6, 3);
+      px(ctx, 32, 16, c, 3, 5);
+      px(ctx, 27, 23, d, 3, 5);
+      px(ctx, 7, 18, d, 5, 2);
+      px(ctx, 5, 20, d, 3, 7);
+      px(ctx, 30, 10, "#2a1a12");
+    },
+    "#24150c",
+  );
+}
+
+function bench(): Sprite {
+  return sprite(
+    34,
+    16,
+    17,
+    14,
+    (ctx) => {
+      px(ctx, 2, 2, "#8a5a32", 30, 3);
+      px(ctx, 2, 2, "#b07a46", 30, 1);
+      px(ctx, 2, 7, "#a8733f", 30, 4);
+      px(ctx, 2, 7, "#c99a5a", 30, 1);
+      px(ctx, 4, 5, "#5e3d24", 2, 9);
+      px(ctx, 28, 5, "#5e3d24", 2, 9);
+    },
+    "#2a1a12",
+  );
+}
+
 const propCache = new Map<string, Sprite>();
 
 export function propSprite(p: Prop): Sprite {
@@ -732,6 +1038,48 @@ export function propSprite(p: Prop): Sprite {
         break;
       case "stall":
         s = stall(p.v);
+        break;
+      case "crops":
+        s = crops(p.v);
+        break;
+      case "hay":
+        s = hay(p.v);
+        break;
+      case "trough":
+        s = trough();
+        break;
+      case "mailbox":
+        s = mailbox();
+        break;
+      case "woodpile":
+        s = woodpile();
+        break;
+      case "signpost":
+        s = signpost(p.v);
+        break;
+      case "lily":
+        s = lily(p.v);
+        break;
+      case "mushroom":
+        s = mushroom(p.v);
+        break;
+      case "log":
+        s = log();
+        break;
+      case "grass":
+        s = tallGrass(p.v);
+        break;
+      case "flowers":
+        s = flowerPatch(p.v);
+        break;
+      case "cart":
+        s = cart();
+        break;
+      case "statue":
+        s = statue();
+        break;
+      case "bench":
+        s = bench();
         break;
     }
     propCache.set(key, s);
@@ -913,6 +1261,11 @@ export interface BuildingSprite extends Sprite {
 const buildingCache = new Map<string, BuildingSprite>();
 
 /** 房子的贴图，锚点在占地的左下角。 */
+/** 屋脊的高度（缓冲坐标，相对地图），烟囱和炊烟用。 */
+export function roofTop(b: Building): number {
+  return (b.z + b.d) * TILE - WALL_PX - Math.round((ROOF_TILES[b.kind] ?? 0) * TILE);
+}
+
 export function buildingSprite(b: Building): BuildingSprite {
   let s = buildingCache.get(b.id);
   if (s) return s;
