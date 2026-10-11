@@ -104,14 +104,14 @@ function playSeason(tag: string): { weeks: Week[]; ending: string | null; ruined
     const mine = pickFor(g);
     if (mine && g.money >= ENTRY_FEE && register(g, mine.id).ok) {
       const field = todaysField(g);
-      // 私下模拟两遍，都赢才押。
+      // 私下模拟两遍：都赢就押；赢一遍、赔率又高也押。
       let privWins = 0;
       for (let i = 0; i < 2; i++) if (runField(field, day, hashSeed(`${tag}:priv:${day}:${i}`))?.[0] === mine.id) privWins++;
       const odds = todaysOdds(g)[field.findIndex((f) => f.mine)] ?? 1;
       // 还债那天留够钱，平时押一半家当。
       const reserve = day % 7 === 0 ? debtDue(day) : 0;
       const stake = Math.min(betLimit(g.reputation), Math.floor(Math.max(0, g.money - reserve) / 2));
-      if (privWins === 2 && odds >= 1.5 && stake >= 10 && placeBet(g, mine.id, stake, false).ok) bets++;
+      if ((privWins === 2 || (privWins === 1 && odds >= 4)) && odds >= 1.5 && stake >= 10 && placeBet(g, mine.id, stake, false).ok) bets++;
     }
     const field = todaysField(g);
     const order = runField(field, day, hashSeed(`${tag}:event:${day}`));

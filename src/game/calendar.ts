@@ -19,7 +19,7 @@ export interface Boss {
 export const BOSSES: Boss[] = [
   { owner: "老赵", horse: "铁墩", sport: "sumo", prize: 1000 },
   { owner: "米娅", horse: "豆包", sport: "race", prize: 3000 },
-  { owner: "K博士", horse: "样本七号", sport: "race", prize: 6000 },
+  { owner: "K博士", horse: "样本七号", sport: "race", prize: 8000 },
 ];
 
 /** 天马杯：马董带着完美马「完璧」，和镇上最好的几匹马一起跑。 */
@@ -50,7 +50,7 @@ export function seasonWeek(day: number): number {
 }
 
 /** 平时比赛的奖金随周上涨：后面的赛事看的人多，彩头也大。 */
-export const PRIZE_SCALE = [1, 2, 4, 6];
+export const PRIZE_SCALE = [1, 2, 5, 8];
 
 export function prizeScale(day: number): number {
   return PRIZE_SCALE[seasonWeek(day) - 1] as number;
