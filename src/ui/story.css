@@ -1,0 +1,212 @@
+/* 剧情界面：任务木牌、开场回忆、信、日记本、结局。只用现有的九宫格木框。 */
+
+/* ---------------- 左上角任务木牌 ---------------- */
+
+.quest {
+  position: absolute;
+  top: calc(var(--u) * 3);
+  left: calc(var(--u) * 3);
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 2);
+  max-width: 40vw;
+  padding: 0 calc(var(--u) * 3);
+  border: solid transparent;
+  border-width: calc(var(--u) * 4);
+  border-image: var(--f-plank) 4 fill / calc(var(--u) * 4) / 0 stretch;
+  image-rendering: pixelated;
+  color: var(--cream);
+  text-shadow: 0 var(--u) 0 var(--ink);
+}
+
+.quest:empty {
+  display: none;
+}
+
+.quest.done {
+  animation: q-flip 0.4s steps(4);
+}
+
+@keyframes q-flip {
+  50% {
+    transform: scaleY(0.2);
+  }
+}
+
+.q-pin {
+  flex: none;
+  width: calc(var(--u) * 4);
+  height: calc(var(--u) * 4);
+  background: var(--red);
+  box-shadow: 0 var(--u) 0 var(--ink);
+}
+
+.q-text.wait {
+  color: var(--paper);
+}
+
+.q-count {
+  font-weight: normal;
+  color: var(--gold);
+}
+
+/* ---------------- 对白里没有头像的人：名字写成小木牌 ---------------- */
+
+.t-who {
+  display: inline-block;
+  margin-right: calc(var(--u) * 2);
+  padding: 0 calc(var(--u) * 2);
+  font-size: var(--fs-s);
+  color: var(--cream);
+  border: solid transparent;
+  border-width: calc(var(--u) * 2);
+  border-image: var(--f-plank) 4 fill / calc(var(--u) * 3) / 0 stretch;
+  image-rendering: pixelated;
+  vertical-align: middle;
+}
+
+.t-text.paper {
+  border-image: var(--f-paper) 4 fill / calc(var(--u) * 4) / 0 stretch;
+  border-width: calc(var(--u) * 4);
+  padding: calc(var(--u) * 4) calc(var(--u) * 8);
+}
+
+/* ---------------- 开场回忆 ---------------- */
+
+.scene {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--u) * 8);
+  background: #0c0806;
+  color: var(--cream);
+  cursor: pointer;
+}
+
+.scene-pic {
+  width: calc(var(--u) * 96 * 3);
+  max-width: 90vw;
+  aspect-ratio: 96 / 54;
+  image-rendering: pixelated;
+  box-shadow: 0 0 0 var(--u) #3b2414;
+}
+
+.scene-text {
+  margin: 0;
+  max-width: min(calc(var(--u) * 260), 90vw);
+  text-align: center;
+  line-height: 1.6;
+}
+
+.scene .t-more {
+  position: static;
+  border-top-color: var(--gold);
+}
+
+.scene.in .scene-pic,
+.scene.in .scene-text {
+  animation: scene-in 0.6s steps(6) both;
+}
+
+@keyframes scene-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ---------------- 信和日记 ---------------- */
+
+.mail + .mail {
+  margin-top: calc(var(--u) * 4);
+}
+
+.mail-title {
+  margin: 0 0 calc(var(--u) * 1);
+  font-weight: normal;
+  text-align: center;
+  color: var(--wood-dark);
+}
+
+.diary {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 2);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.d-page {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(var(--u) * 3);
+  padding: calc(var(--u) * 1) calc(var(--u) * 3);
+  border: solid transparent;
+  border-width: calc(var(--u) * 4);
+  border-image: var(--f-paper) 4 fill / calc(var(--u) * 4) / 0 stretch;
+  image-rendering: pixelated;
+}
+
+.d-page p {
+  margin: 0;
+}
+
+.d-page.missing {
+  opacity: 0.5;
+}
+
+.d-no {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: calc(var(--u) * 10);
+  height: calc(var(--u) * 10);
+  color: var(--cream);
+  background: var(--wood);
+  box-shadow: 0 0 0 var(--u) var(--ink);
+}
+
+/* ---------------- 结局 ---------------- */
+
+.ending {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--u) * 3);
+  padding: calc(var(--u) * 4);
+  text-align: center;
+}
+
+.ending .say {
+  margin: 0;
+}
+
+/* ---------------- 基因栏第一次出现 ---------------- */
+
+.genes-new {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 2);
+  margin-top: calc(var(--u) * 2);
+}
+
+.genes-new .tag {
+  animation: blink 1s steps(2) infinite;
+}
+
+/* ---------------- 测序所关门 ---------------- */
+
+.closed-sign {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--u) * 2);
+  padding: calc(var(--u) * 4);
+}
+
+.closed-sign .say {
+  margin: 0;
+}

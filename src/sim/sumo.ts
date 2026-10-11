@@ -13,6 +13,8 @@ export interface SumoOptions {
   timeLimit?: number;
   /** 开打时间（秒）；之前两匹马原地站稳，默认 1。 */
   startAt?: number;
+  gravity?: number;
+  groundFriction?: number;
 }
 
 /** ringout 出圈，flip 摔倒，time 时间到按离圈心远近判，draw 平局。 */
@@ -64,11 +66,11 @@ export class SumoBout {
     this.timeLimit = opts.timeLimit ?? 60;
     this.startAt = opts.startAt ?? 1.0;
     this.rng = createRng(opts.seed);
-    this.world = new World({ gravity: new Vec2(0, -9.8) });
+    this.world = new World({ gravity: new Vec2(0, -(opts.gravity ?? 9.8)) });
     const ground = this.world.createBody({ type: "static" });
     const half = this.ringRadius + 40;
     ground.createFixture(new Edge(new Vec2(-half, 0), new Vec2(half, 0)), {
-      friction: 1,
+      friction: opts.groundFriction ?? 1,
       filterCategoryBits: CATEGORY_GROUND,
       filterMaskBits: 0xffff,
     });

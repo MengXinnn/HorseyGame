@@ -15,20 +15,24 @@ export const LASSOS_PER_DAY = 3;
 export const ENTRY_FEE = 50;
 export const SEQUENCING_FEE = 200;
 export const RACE_DISTANCE = 400;
-export const RACE_PRIZES = [400, 200, 100];
-export const SUMO_PRIZE = 300;
+export const RACE_PRIZES = [500, 250, 120];
+export const SUMO_PRIZE = 400;
 export const BOSS_PRIZE = 1000;
 /** 每周日晚上要还的钱（四周还清六万）。 */
 export const DEBT_SCHEDULE = [2000, 8000, 20000, 30000];
 /** 一匹马从出生到成年要几天。 */
 export const FOAL_DAYS = 2;
 
-export type EventKind = "race" | "sumo" | "boss";
+export type EventKind = "race" | "sumo" | "boss" | "cup";
 
-export const EVENT_LABELS: Record<EventKind, string> = { race: "平地赛", sumo: "相扑", boss: "老赵擂台" };
+export const EVENT_LABELS: Record<EventKind, string> = { race: "平地赛", sumo: "相扑", boss: "擂台", cup: "天马杯" };
 
-/** 每天的赛事：单日平地赛，双日相扑，每周第七天老赵摆擂台。 */
+/** 一届赛季多少天；第 28 天是天马杯，之后的无尽模式每 28 天再办一届。 */
+export const SEASON_DAYS = 28;
+
+/** 每天的赛事：单日平地赛，双日相扑，每周第七天擂台，第 28 天天马杯。 */
 export function eventFor(day: number): EventKind {
+  if (day % SEASON_DAYS === 0) return "cup";
   if (day % 7 === 0) return "boss";
   return day % 2 === 1 ? "race" : "sumo";
 }

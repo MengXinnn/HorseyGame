@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "sim:stability": "vitest run --config vitest.stability.config.ts"
+    "sim:stability": "vitest run --config vitest.stability.config.ts",
+    "sim:economy": "vitest run --config vitest.economy.config.ts"
   },
   "dependencies": {
     "@fontsource/fusion-pixel-12px-proportional-sc": "^5.3.0",

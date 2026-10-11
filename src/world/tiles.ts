@@ -68,7 +68,7 @@ export const BUILDINGS: Building[] = [
   { id: "stand", kind: "stand", x: 9, z: 3, w: 18, d: 3 },
 ];
 
-export type InteractId = "sleep" | "barn" | "board" | "sequence" | "market" | "bookie" | "sumo" | "race" | "laozhao";
+export type InteractId = "sleep" | "mail" | "barn" | "board" | "sequence" | "market" | "bookie" | "sumo" | "race" | "laozhao";
 
 export interface Interactable {
   id: InteractId;
@@ -84,10 +84,12 @@ const door = (id: string): { x: number; z: number } => {
 };
 
 export const BOARD = { x: 19.5, z: 50 };
+export const MAILBOX = { x: 17.5, z: 49.9 };
 
 export const INTERACTS: Interactable[] = [
   { id: "sleep", ...door("home"), radius: 1.6, label: "睡觉" },
   { id: "barn", ...door("barn"), radius: 1.8, label: "配种" },
+  { id: "mail", x: MAILBOX.x, z: MAILBOX.z + 0.8, radius: 1.1, label: "信箱" },
   { id: "board", x: BOARD.x, z: BOARD.z + 0.8, radius: 1.3, label: "马码" },
   { id: "sequence", ...door("seq"), radius: 1.8, label: "测序" },
   { id: "market", ...door("market"), radius: 1.8, label: "马市" },

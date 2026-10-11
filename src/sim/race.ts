@@ -22,6 +22,10 @@ export interface RaceOptions {
   timeLimit: number;
   gravity?: number;
   groundFriction?: number;
+  /** 迎面风（米/秒²），把马往后推。 */
+  wind?: number;
+  /** 看台上的人多：胆小的马发呆的机会乘这个倍数。 */
+  crowd?: number;
   /** 发令时间（秒）；之前马原地站稳。Infinity 表示只站着不跑（马厩展示用）。 */
   startAt?: number;
 }
@@ -58,7 +62,7 @@ export class Race {
   constructor(entrants: Entrant[], options: RaceOptions) {
     this.options = options;
     this.rng = createRng(options.seed);
-    this.world = new World({ gravity: new Vec2(0, -(options.gravity ?? 9.8)) });
+    this.world = new World({ gravity: new Vec2(-(options.wind ?? 0), -(options.gravity ?? 9.8)) });
     const ground = this.world.createBody({ type: "static" });
     ground.createFixture(new Edge(new Vec2(-50, 0), new Vec2(options.distance + 200, 0)), {
       friction: options.groundFriction ?? 1,
@@ -67,6 +71,7 @@ export class Race {
     });
     this.runners = entrants.map((entrant, i) => {
       const plan = bodyPlanFrom(express(entrant.genome));
+      if (options.crowd) plan.stallPerSecond *= options.crowd;
       const horse = new HorseSim(this.world, plan, 0, i + 1, createRng(this.rng.int(1, 2 ** 31)));
       return { entrant, horse, startX: horse.x, finishTime: null };
     });

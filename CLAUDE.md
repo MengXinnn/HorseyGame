@@ -16,5 +16,6 @@
 ```bash
 npm test               # 单元测试
 npm run sim:stability  # 1000 匹随机马稳定性检查
+npm run sim:economy    # 模拟玩家过 28 天，调奖金和债务
 npm run build          # 类型检查 + 打包
 ```
