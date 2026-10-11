@@ -28,13 +28,50 @@ const requested = new Set<string>();
 
 /** 先放大这么多倍画字，再取每个字像素的中心点。 */
 const SS = 4;
+/** 放大画字的画布有多少行（字像素），基线画在第几行。留得很宽，什么系统都不会画出界。 */
+const BIG_H = 28;
+const BASE = 18;
+
+/** 按基线画一段字，在每个字像素中心取样，返回 BIG_H 行、W 列的「有没有」。 */
+function rasterize(text: string, W: number): Uint8Array {
+  const [big, bctx] = canvas(W * SS, BIG_H * SS);
+  bctx.font = `${12 * SS}px ${PIXEL_FONT}`;
+  bctx.textBaseline = "alphabetic";
+  bctx.fillStyle = "#000";
+  bctx.fillText(text, 2 * SS, BASE * SS);
+  const src = bctx.getImageData(0, 0, W * SS, BIG_H * SS).data;
+  big.width = 0;
+  const out = new Uint8Array(W * BIG_H);
+  for (let y = 0; y < BIG_H; y++)
+    for (let x = 0; x < W; x++) if (src[((y * SS + SS / 2) * W * SS + x * SS + SS / 2) * 4 + 3]! >= 128) out[y * W + x] = 1;
+  return out;
+}
+
+/** 满格汉字的顶在放大画布的第几行；字体到位后量一次就记住。 */
+let capTop: number | null = null;
+function measureCapTop(): number {
+  if (capTop !== null) return capTop;
+  const W = 16;
+  const m = rasterize("国", W);
+  let top = BASE - 11;
+  for (let y = 0; y < BIG_H; y++)
+    if (m.subarray(y * W, y * W + W).some((v) => v)) {
+      top = y;
+      break;
+    }
+  if (fontReady("国")) capTop = top;
+  return top;
+}
 
 /**
  * 像素字：12px 像素字体，每个字像素只有「有」和「没有」，放大后是干净的方块字。可选一圈描边。
+ * 画出来是 16 行高的小画布：左边空 2 列，满格汉字占第 1 到 11 行，下面留给 g、y 这类下伸笔画。
  *
- * 不能直接按 12px 画再把透明度一刀切：有的系统（字体度量取整不同、Mac 的文字渲染）会把字形
- * 摆在半个像素上，一笔横跨两行、每行都只有一半深，切完整行笔画就没了。
- * 所以先按 4 倍大小画，再在每个字像素的正中取样：字形偏出去不到半个字像素都不影响。
+ * 两个坑：
+ * - 不能直接按 12px 画再把透明度一刀切：有的系统会把字形摆在半个像素上，一笔横跨两行、
+ *   每行都只有一半深，切完整行笔画就没了。所以先按 4 倍大小画，再在每个字像素正中取样。
+ * - 不能用 textBaseline = "top" 定位：各家浏览器对「顶」的理解不一样（Safari 会把字往下放几个像素，
+ *   底下几行就画出了画布）。所以按字母基线画在一张很高的画布上，量出满格汉字的顶在哪，再对齐到第 1 行。
  */
 export function textSprite(text: string, color: string, line: string | null = null): HTMLCanvasElement {
   const key = `${text}|${color}|${line}`;
@@ -51,30 +88,27 @@ export function textSprite(text: string, color: string, line: string | null = nu
   m.width = 0;
   const W = w + 2;
   const H = 16;
-  const [big, bctx] = canvas(W * SS, H * SS);
-  bctx.font = `${12 * SS}px ${PIXEL_FONT}`;
-  bctx.textBaseline = "top";
-  bctx.fillStyle = color;
-  bctx.fillText(text, 2 * SS, 2 * SS);
-  const src = bctx.getImageData(0, 0, W * SS, H * SS).data;
+  const mask = rasterize(text, W);
+  const shift = measureCapTop() - 1;
   const [c, ctx] = canvas(W, H);
   const img = ctx.createImageData(W, H);
   const d = img.data;
   const [r, g, b] = [parseInt(color.slice(1, 3), 16), parseInt(color.slice(3, 5), 16), parseInt(color.slice(5, 7), 16)];
-  for (let y = 0; y < H; y++)
+  for (let y = 0; y < H; y++) {
+    const sy = y + shift;
+    if (sy < 0 || sy >= BIG_H) continue;
     for (let x = 0; x < W; x++) {
-      const a = src[((y * SS + SS / 2) * W * SS + x * SS + SS / 2) * 4 + 3]!;
-      if (a < 128) continue;
+      if (!mask[sy * W + x]) continue;
       const i = (y * W + x) * 4;
       d[i] = r;
       d[i + 1] = g;
       d[i + 2] = b;
       d[i + 3] = 255;
     }
+  }
   ctx.putImageData(img, 0, 0);
-  big.width = 0;
   if (line) outline(c, line, 100);
-  if (ready) textCache.set(key, c);
+  if (ready && capTop !== null) textCache.set(key, c);
   return c;
 }
 
