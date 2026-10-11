@@ -36,6 +36,8 @@ export interface BuildingSprite {
   chimney: [number, number] | null;
   /** 风车的轮毂。 */
   hub: [number, number] | null;
+  /** 匾额上的字：不烘进贴图，放大以后画在屏幕上（见 labels.ts signText）。 */
+  texts: SignText[];
 }
 
 /** 前墙高度、屋顶高出占地的部分（像素）。 */
@@ -62,10 +64,12 @@ const SPEC: Record<BuildingKind, { wall: number; rise: number }> = {
 const WARM = "#ffc970";
 const INK = "#2a1a12";
 
-interface Text {
+/** 匾额上的一行字：(x, y) 是牌面中心（相对贴图左上角），w 是牌面能放字的宽度。 */
+export interface SignText {
   text: string;
   x: number;
   y: number;
+  w: number;
   color: string;
 }
 
@@ -82,7 +86,7 @@ class Painter {
   readonly top: number;
   readonly rng: Rng;
   lights: BuildingLight[] = [];
-  texts: Text[] = [];
+  texts: SignText[] = [];
   glowUsed = false;
   chimney: [number, number] | null = null;
   hub: [number, number] | null = null;
@@ -308,16 +312,19 @@ function doorAt(p: Painter, cx: number, w: number, h: number, style: DoorStyle, 
   return [x, y];
 }
 
-/** 匾额：深色木牌，金字，挂在檐下或屋顶上。 */
+/**
+ * 匾额：深色木牌，金字，挂在檐下或屋顶上。
+ * 字在屏幕上按 24px 画（一个字像素约是 2/3 个美术像素），牌子按这个宽度留出边。
+ */
 function plaque(p: Painter, cx: number, y: number, text: string, bg = "#3a2414", fg = "#f6cf5a"): void {
   const t = textSprite(text, fg);
-  const w = Math.max(20, t.width + 4);
+  const w = Math.max(20, Math.ceil((t.width - 4) * 0.7) + 10);
   const x = Math.round(cx - w / 2);
   p.r.rect(x - 1, y - 1, w + 2, 16, INK);
   p.r.rect(x, y, w, 14, bg);
   p.r.rect(x, y, w, 1, shade(bg, 0.3));
   p.r.rect(x, y + 13, w, 1, shade(bg, -0.3));
-  p.texts.push({ text, x: Math.round(cx - t.width / 2), y: y - 1, color: fg });
+  p.texts.push({ text, x: cx, y: y + 7, w: w - 4, color: fg });
 }
 
 /** 檐下挂的红灯笼。 */
@@ -1067,8 +1074,6 @@ export function buildingSprite(b: Building): BuildingSprite {
   DRAW[b.kind](p);
   p.r.outline(INK);
   const img = p.r.toCanvas();
-  const ctx = img.getContext("2d") as CanvasRenderingContext2D;
-  for (const t of p.texts) ctx.drawImage(textSprite(t.text, t.color), t.x, t.y);
   s = {
     img,
     glow: p.glowUsed ? p.g.toCanvas() : null,
@@ -1077,6 +1082,7 @@ export function buildingSprite(b: Building): BuildingSprite {
     lights: p.lights,
     chimney: p.chimney,
     hub: p.hub,
+    texts: p.texts,
   };
   cache.set(b.id, s);
   return s;

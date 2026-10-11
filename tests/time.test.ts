@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AFTER_EVENT, DAY_START, EVENT_TIME, formatSpan, MIDNIGHT, TIME_COST } from "../src/game/season";
+import { AFTER_EVENT, DAY_START, EVENT_TIME, formatSpan, MIDNIGHT, TIME_COST, TRAVEL_TILES } from "../src/game/season";
 import {
   addCaught,
   importHorse,
@@ -16,11 +16,11 @@ import {
   todaysField,
   travel,
   waitForEvent,
+  walk,
   type GameState,
 } from "../src/game/state";
 import { encodeGenome, randomGenome } from "../src/genome/genome";
 import { createRng } from "../src/sim/rng";
-import { arrivedRegion, REGIONS } from "../src/world/tiles";
 
 const fresh = (): GameState => {
   const g = newGame();
@@ -118,11 +118,27 @@ describe("时间只在做事的时候走", () => {
   });
 });
 
-describe("走到另一片地方才算赶路", () => {
-  it("在边上蹭不算到了，走进去两格才算", () => {
-    const town = REGIONS.find((r) => r.id === "town")!;
-    const z = (town.rect.z0 + town.rect.z1) / 2;
-    expect(arrivedRegion(town.rect.x0 + 0.5, z)).toBeUndefined();
-    expect(arrivedRegion(town.rect.x0 + 3, z)?.id).toBe("town");
+describe("走路按路程记时间", () => {
+  it("零碎的几步攒起来，攒够一段路才花一刻钟", () => {
+    const g = fresh();
+    const start = g.clock;
+    for (let i = 0; i < TRAVEL_TILES * 10 - 1; i++) walk(g, 0.1);
+    expect(g.clock).toBe(start);
+    walk(g, 0.2);
+    expect(g.clock).toBe(start + TIME_COST.travel);
+  });
+
+  it("一口气走很远，按段数记", () => {
+    const g = fresh();
+    const start = g.clock;
+    expect(walk(g, TRAVEL_TILES * 3 + 5)).toBe(3);
+    expect(g.clock).toBe(start + 3 * TIME_COST.travel);
+    expect(g.walked).toBeCloseTo(5);
+  });
+
+  it("旧存档没有路程零头也能走", () => {
+    const g = fresh();
+    (g as { walked?: number }).walked = undefined;
+    expect(walk(g, TRAVEL_TILES)).toBe(1);
   });
 });

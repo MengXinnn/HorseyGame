@@ -108,13 +108,22 @@ function outlineRegion(c: HTMLCanvasElement, w: number, h: number): void {
 
 const region = canvas(1, 1);
 
-/** 屏幕上的像素字：12px 字放大 scale 倍。 */
+/**
+ * 屏幕上的像素字：12px 字放大 scale 倍。line 是右下方的深色影子（默认有）。
+ * 不描一整圈边：汉字笔画之间只隔一个像素，描边会把缝填死。
+ */
 export function pixelText(s: Ctx, text: string, x: number, y: number, opts: { color?: string; line?: string | null; scale?: number; align?: "left" | "center" | "right" } = {}): number {
-  const t = textSprite(text, opts.color ?? "#fff2d0", opts.line === undefined ? "#3b1c0e" : opts.line);
+  const t = textSprite(text, opts.color ?? "#fff2d0");
+  const line = opts.line === undefined ? "#3b1c0e" : opts.line;
   const k = opts.scale ?? 2;
   const w = t.width * k;
   const dx = opts.align === "center" ? -w / 2 : opts.align === "right" ? -w : 0;
-  s.drawImage(t, Math.round(x + dx), Math.round(y), w, t.height * k);
+  const [x0, y0] = [Math.round(x + dx), Math.round(y)];
+  if (line) {
+    const sh = textSprite(text, line);
+    for (const [ox, oy] of [[k, 0], [0, k], [k, k]] as const) s.drawImage(sh, x0 + ox, y0 + oy, w, t.height * k);
+  }
+  s.drawImage(t, x0, y0, w, t.height * k);
   return w;
 }
 
