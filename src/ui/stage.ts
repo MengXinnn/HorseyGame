@@ -46,6 +46,8 @@ export class Stage {
   time: TimeOfDay = "dusk";
   speed = 1;
   paused = false;
+  /** 不在屏幕上时停掉推进和绘制。 */
+  active = true;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -69,7 +71,18 @@ export class Stage {
     this.acc = 0;
     this.dust = [];
     this.finishedFired = false;
-    this.camX = race.runners[opts.player]?.horse.x ?? 0;
+    this.camX = race.runners[Math.max(0, opts.player)]?.horse.x ?? 0;
+  }
+
+  /** 收场：清掉比赛，不再推进。 */
+  clear(): void {
+    this.race = null;
+    this.dust = [];
+  }
+
+  /** 跳过：直接算完，下一帧触发结束回调。 */
+  skip(): void {
+    if (this.race && !this.race.finished) this.race.runToEnd();
   }
 
   destroy(): void {
@@ -80,6 +93,7 @@ export class Stage {
     this.raf = requestAnimationFrame(this.frame);
     const dt = this.last ? Math.min(0.1, (now - this.last) / 1000) : 0;
     this.last = now;
+    if (!this.active) return;
     this.wall += dt;
     const race = this.race;
     if (race && !this.paused) {
@@ -135,8 +149,13 @@ export class Stage {
   }
 
   /** 玩家的马永远在最前面的泳道，其余按下标往后排。 */
+  private leader(race: Race) {
+    return race.runners.reduce((a, b) => (race.progress(b) > race.progress(a) ? b : a));
+  }
+
   private laneOf(index: number): number {
     const p = this.opts.player;
+    if (p < 0) return index;
     if (index === p) return 0;
     return index < p ? index + 1 : index;
   }
@@ -147,7 +166,7 @@ export class Stage {
     const race = this.race;
     const mode = this.opts.mode;
     const n = race ? race.runners.length : 1;
-    const player = race?.runners[this.opts.player];
+    const player = race ? (race.runners[this.opts.player] ?? this.leader(race)) : undefined;
     if (player) {
       const target = player.horse.x + (mode === "race" ? 1.5 : 0);
       this.camX += (target - this.camX) * (mode === "preview" ? 1 : 0.12);
@@ -208,7 +227,7 @@ export class Stage {
       ctx.lineTo(fx, fy + 10);
       ctx.stroke();
       ctx.fillStyle = rgba(rim, 0.8);
-      ctx.font = "600 12px 'Noto Sans SC', sans-serif";
+      ctx.font = "600 12px 'Noto Serif SC', serif";
       ctx.textAlign = "center";
       ctx.fillText(m === distance ? "终点" : m === 0 ? "起点" : `${m}`, bx, by - 12);
       if (m === distance) {
@@ -233,7 +252,7 @@ export class Stage {
     const ctx = this.ctx;
     const left = this.camX - (view.width * (view.anchor ?? 0.5)) / view.ppm;
     const right = left + view.width / view.ppm;
-    ctx.font = "600 12px 'Noto Sans SC', sans-serif";
+    ctx.font = "600 12px 'Noto Serif SC', serif";
     ctx.textAlign = "center";
     for (let m = Math.max(0, Math.ceil(left / 5) * 5); m <= right; m += 5) {
       const [x, y] = toScreen(view, { x: m, y: 0 });
@@ -249,16 +268,22 @@ export class Stage {
     const a = pose.neck.angle + NECK_ANGLE;
     const head = { x: pose.neck.x + Math.cos(a) * plan.neckLength, y: pose.neck.y + Math.sin(a) * plan.neckLength };
     const [x, y] = toScreen(view, { x: head.x, y: Math.max(head.y, pose.torso.y) + 0.45 });
-    ctx.font = `${mine ? 700 : 500} ${mine ? 14 : 11}px 'Noto Sans SC', sans-serif`;
-    const tw = ctx.measureText(name).width + 14;
-    ctx.fillStyle = mine ? "rgba(243,199,123,0.95)" : "rgba(20,16,36,0.55)";
+    ctx.font = `700 ${mine ? 15 : 12}px 'Noto Serif SC', serif`;
+    const tw = ctx.measureText(name).width + 16;
+    const th = mine ? 24 : 19;
+    ctx.fillStyle = "#2c1a10";
     ctx.beginPath();
-    ctx.roundRect(x - tw / 2, y - 26, tw, mine ? 22 : 18, 9);
+    ctx.roundRect(x - tw / 2 - 2, y - 28, tw + 4, th + 4, 5);
     ctx.fill();
-    ctx.fillStyle = mine ? "#2a1b2e" : rgba(rim, 0.95);
+    ctx.fillStyle = mine ? "#b8322a" : "#7a4a2a";
+    ctx.beginPath();
+    ctx.roundRect(x - tw / 2, y - 26, tw, th, 4);
+    ctx.fill();
+    ctx.fillStyle = mine ? "#fbe9c0" : rgba("#fbe9c0", 0.9);
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(name, x, y - 26 + (mine ? 11 : 9));
+    ctx.fillText(name, x, y - 26 + th / 2 + 1);
+    void rim;
     ctx.textBaseline = "alphabetic";
   }
 
@@ -266,22 +291,30 @@ export class Stage {
     const ctx = this.ctx;
     const mode = this.opts.mode;
     if (mode === "preview") return;
-    const me = race.runners[this.opts.player];
+    const me = race.runners[this.opts.player] ?? this.leader(race);
     if (!me) return;
     const dist = Math.max(0, race.progress(me));
     const speed = Math.max(0, me.horse.pose().speed);
-    ctx.fillStyle = "rgba(14,12,30,0.55)";
+    // 木牌计时板。
+    ctx.fillStyle = "#2c1a10";
     ctx.beginPath();
-    ctx.roundRect(14, 14, 190, 64, 12);
+    ctx.roundRect(12, 12, 194, 68, 12);
     ctx.fill();
-    ctx.fillStyle = "#fbefd9";
+    const wood = ctx.createLinearGradient(0, 14, 0, 78);
+    wood.addColorStop(0, "#8f5c35");
+    wood.addColorStop(1, "#5e3820");
+    ctx.fillStyle = wood;
+    ctx.beginPath();
+    ctx.roundRect(15, 15, 188, 62, 10);
+    ctx.fill();
+    ctx.fillStyle = "#fbe9c0";
     ctx.textAlign = "left";
-    ctx.font = "700 22px 'Noto Sans SC', sans-serif";
+    ctx.font = "700 22px 'Noto Serif SC', serif";
     const remaining = Math.max(0, race.options.timeLimit - race.raceTime);
     const clock = mode === "trial" ? `${remaining.toFixed(1)} 秒` : `${race.raceTime.toFixed(1)} 秒`;
     ctx.fillText(race.started ? clock : "预备…", 26, 42);
-    ctx.font = "500 13px 'Noto Sans SC', sans-serif";
-    ctx.fillStyle = "rgba(251,239,217,0.8)";
+    ctx.font = "600 13px 'Noto Serif SC', serif";
+    ctx.fillStyle = "rgba(251,233,192,0.85)";
     const distText = `${dist.toFixed(1)} 米`;
     ctx.fillText(distText, 26, 64);
     ctx.fillText(me.horse.state === "fallen" ? "摔倒" : `${(speed * 3.6).toFixed(0)} 公里/时`, 26 + ctx.measureText(distText).width + 16, 64);

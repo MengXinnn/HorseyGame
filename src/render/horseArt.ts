@@ -97,8 +97,39 @@ function local(origin: Vec2Like, angle: number, lx: number, ly: number): Vec2Lik
   return { x: origin.x + lx * c - ly * s, y: origin.y + lx * s + ly * c };
 }
 
-/** 按物理姿态画一匹马。 */
+/** 把朝左的姿态绕躯干中心镜像成朝右的姿态（x' = 2·cx − x，角度取反，远近腿不变）。 */
+function mirrorPose(pose: HorsePose): HorsePose {
+  const cx = pose.torso.x;
+  const m = (p: Vec2Like): Vec2Like => ({ x: 2 * cx - p.x, y: p.y });
+  return {
+    ...pose,
+    torso: { x: cx, y: pose.torso.y, angle: -pose.torso.angle },
+    neck: { x: 2 * cx - pose.neck.x, y: pose.neck.y, angle: -pose.neck.angle },
+    legs: pose.legs.map((l) => ({ ...l, hip: m(l.hip), knee: m(l.knee), foot: m(l.foot) })),
+    facing: 1,
+  };
+}
+
+/** 按物理姿态画一匹马。朝左（facing −1）的马画成朝右的马的镜像，气泡里的字不镜像。 */
 export function drawHorsePose(ctx: CanvasRenderingContext2D, pose: HorsePose, plan: BodyPlan, look: HorseLook, view: View): void {
+  const bubble = pose.stalled || pose.fallen || pose.stumbling ? (pose.fallen ? "晕" : pose.stumbling ? "!" : "…") : null;
+  if (pose.facing === -1) {
+    const [tx] = toScreen(view, pose.torso);
+    ctx.save();
+    ctx.translate(tx, 0);
+    ctx.scale(-1, 1);
+    ctx.translate(-tx, 0);
+    const [bx, by] = drawFacingRight(ctx, mirrorPose(pose), plan, look, view);
+    ctx.restore();
+    if (bubble) drawBubble(ctx, 2 * tx - bx, by, bubble, look.rim);
+  } else {
+    const [bx, by] = drawFacingRight(ctx, pose, plan, look, view);
+    if (bubble) drawBubble(ctx, bx, by, bubble, look.rim);
+  }
+}
+
+/** 画一匹头朝右的马，返回头顶气泡的位置（屏幕像素）。 */
+function drawFacingRight(ctx: CanvasRenderingContext2D, pose: HorsePose, plan: BodyPlan, look: HorseLook, view: View): [number, number] {
   const ppm = view.ppm;
   const { light, dark, mane } = look.coat;
   const rim = look.rim;
@@ -336,10 +367,8 @@ export function drawHorsePose(ctx: CanvasRenderingContext2D, pose: HorsePose, pl
 
   drawLeg(false);
 
-  if (pose.stalled || pose.fallen || pose.stumbling) {
-    const [bx, by] = topBack;
-    drawBubble(ctx, bx + w * 2, by - w * 5, pose.fallen ? "晕" : pose.stumbling ? "!" : "…", rim);
-  }
+  const [bx, by] = topBack;
+  return [bx + w * 2, by - w * 5];
 }
 
 function drawBubble(ctx: CanvasRenderingContext2D, x: number, y: number, text: string, rim: string): void {
