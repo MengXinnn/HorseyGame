@@ -1,9 +1,10 @@
 import type { BodyPlan } from "../body/bodyPlan";
 import { rgba, shade } from "../render/color";
-import { drawHorsePose, lookFor, toScreen, type View } from "../render/horseArt";
+import { lookFor, toScreen, type View } from "../render/horseArt";
 import { drawScene, drawTrackDetails, PALETTES, type TimeOfDay } from "../render/scene";
 import type { HorsePose } from "../sim/horse";
 import { STEP, type Race } from "../sim/race";
+import { drawPixelHorse, PixelSurface, pixelBox, pixelText, PX } from "./pixelCanvas";
 
 const NECK_ANGLE = 0.95;
 
@@ -32,8 +33,11 @@ export interface StageOptions {
  * 以后换成 PixiJS 只需要替换这一层。
  */
 export class Stage {
-  private readonly canvas: HTMLCanvasElement;
+  private readonly surface: PixelSurface;
+  /** 场景缓冲（按 CSS 坐标画，自动缩小）。 */
   private readonly ctx: CanvasRenderingContext2D;
+  /** 场景里要写的字，留到放大以后用像素字体写在屏幕上。 */
+  private labels: Array<{ x: number; y: number; text: string; color: string }> = [];
   private race: Race | null = null;
   private opts: StageOptions = { mode: "preview", player: 0 };
   private acc = 0;
@@ -50,10 +54,8 @@ export class Stage {
   active = true;
 
   constructor(canvas: HTMLCanvasElement) {
-    this.canvas = canvas;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas 2D 不可用");
-    this.ctx = ctx;
+    this.surface = new PixelSurface(canvas);
+    this.ctx = this.surface.buf;
     this.raf = requestAnimationFrame(this.frame);
   }
 
@@ -116,15 +118,8 @@ export class Stage {
   };
 
   private resize(): { W: number; H: number } {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const W = this.canvas.clientWidth || 800;
-    const H = this.canvas.clientHeight || 450;
-    if (this.canvas.width !== Math.round(W * dpr) || this.canvas.height !== Math.round(H * dpr)) {
-      this.canvas.width = Math.round(W * dpr);
-      this.canvas.height = Math.round(H * dpr);
-    }
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    return { W, H };
+    this.labels = [];
+    return this.surface.begin();
   }
 
   /** 每条泳道的镜头参数：越靠后的泳道越小、越高，形成纵深。 */
@@ -181,21 +176,28 @@ export class Stage {
     else drawTrackDetails(ctx, W, H, this.time, this.camX * front.ppm, front.groundY, front.ppm * 2.5);
     if (mode === "trial") this.drawMeterMarks(front, palette.rim);
 
-    if (!race) return;
+    if (!race) {
+      this.surface.present();
+      return;
+    }
     // 从后往前画：后排的马先画，被前排挡住。
     const order = race.runners.map((r, i) => ({ r, i, lane: this.laneOf(i) })).sort((a, b) => b.lane - a.lane);
-    for (const { r, i, lane } of order) {
+    for (const { r, lane } of order) {
       const view = views[Math.min(lane, views.length - 1)] as View;
       this.drawDust(view, lane, palette.ground);
       const pose = r.horse.pose();
       const look = lookFor(r.horse.plan, sc.rim);
       // 远处的马淡一点，突出玩家的马。
-      ctx.globalAlpha = mode === "race" ? 1 - 0.05 * lane : 1;
-      drawHorsePose(ctx, pose, r.horse.plan, look, view);
-      ctx.globalAlpha = 1;
-      if (mode === "race") this.drawTag(view, pose, r.horse.plan, r.entrant.name, i === this.opts.player, sc.rim);
+      drawPixelHorse(ctx, pose, r.horse.plan, look, view, mode === "race" ? 1 - 0.05 * lane : 1);
     }
-    this.drawHud(W, race);
+    const screen = this.surface.present();
+    for (const l of this.labels) pixelText(screen, l.text, l.x, l.y, { color: l.color, align: "center" });
+    if (mode === "race")
+      for (const { r, i, lane } of order) {
+        const view = views[Math.min(lane, views.length - 1)] as View;
+        this.drawTag(screen, view, r.horse.pose(), r.horse.plan, r.entrant.name, i === this.opts.player);
+      }
+    this.drawHud(screen, W, race);
   }
 
   private drawRaceTrack(views: View[], distance: number, rim: string, grass: string): void {
@@ -226,10 +228,7 @@ export class Stage {
       ctx.moveTo(bx, by - 6);
       ctx.lineTo(fx, fy + 10);
       ctx.stroke();
-      ctx.fillStyle = rgba(rim, 0.8);
-      ctx.font = "600 12px 'Noto Serif SC', serif";
-      ctx.textAlign = "center";
-      ctx.fillText(m === distance ? "终点" : m === 0 ? "起点" : `${m}`, bx, by - 12);
+      if (isEnd || m % 100 === 0) this.labels.push({ x: bx, y: by - 40, text: m === distance ? "终点" : m === 0 ? "起点" : `${m}`, color: isEnd ? "#fff2d0" : "#f6d05a" });
       if (m === distance) {
         // 终点旗杆和彩带。
         ctx.strokeStyle = shade(grass, 0.6);
@@ -252,99 +251,66 @@ export class Stage {
     const ctx = this.ctx;
     const left = this.camX - (view.width * (view.anchor ?? 0.5)) / view.ppm;
     const right = left + view.width / view.ppm;
-    ctx.font = "600 12px 'Noto Serif SC', serif";
-    ctx.textAlign = "center";
     for (let m = Math.max(0, Math.ceil(left / 5) * 5); m <= right; m += 5) {
       const [x, y] = toScreen(view, { x: m, y: 0 });
       ctx.fillStyle = rgba(rim, 0.7);
-      ctx.fillRect(x - 1, y + 4, 2, 10);
-      ctx.fillText(`${m} 米`, x, y + 28);
+      ctx.fillRect(x - PX, y + 4, PX, 12);
+      this.labels.push({ x, y: y + 18, text: `${m}米`, color: "#fff2d0" });
     }
   }
 
-  private drawTag(view: View, pose: HorsePose, plan: BodyPlan, name: string, mine: boolean, rim: string): void {
-    const ctx = this.ctx;
+  private drawTag(s: CanvasRenderingContext2D, view: View, pose: HorsePose, plan: BodyPlan, name: string, mine: boolean): void {
     // 名牌挂在头顶上方。
     const a = pose.neck.angle + NECK_ANGLE;
     const head = { x: pose.neck.x + Math.cos(a) * plan.neckLength, y: pose.neck.y + Math.sin(a) * plan.neckLength };
     const [x, y] = toScreen(view, { x: head.x, y: Math.max(head.y, pose.torso.y) + 0.45 });
-    ctx.font = `700 ${mine ? 15 : 12}px 'Noto Serif SC', serif`;
-    const tw = ctx.measureText(name).width + 16;
-    const th = mine ? 24 : 19;
-    ctx.fillStyle = "#2c1a10";
-    ctx.beginPath();
-    ctx.roundRect(x - tw / 2 - 2, y - 28, tw + 4, th + 4, 5);
-    ctx.fill();
-    ctx.fillStyle = mine ? "#b8322a" : "#7a4a2a";
-    ctx.beginPath();
-    ctx.roundRect(x - tw / 2, y - 26, tw, th, 4);
-    ctx.fill();
-    ctx.fillStyle = mine ? "#fbe9c0" : rgba("#fbe9c0", 0.9);
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(name, x, y - 26 + th / 2 + 1);
-    void rim;
-    ctx.textBaseline = "alphabetic";
+    const k = mine ? 2 : 1;
+    const tw = (name.length * 12 + 6) * k;
+    pixelBox(s, x - tw / 2 - 2 * k, y - 22 * k, tw + 4 * k, 18 * k, k, mine ? "red" : "plank");
+    pixelText(s, name, x, y - 22 * k, { scale: k, align: "center", line: null });
   }
 
-  private drawHud(W: number, race: Race): void {
-    const ctx = this.ctx;
+  private drawHud(s: CanvasRenderingContext2D, W: number, race: Race): void {
     const mode = this.opts.mode;
     if (mode === "preview") return;
     const me = race.runners[this.opts.player] ?? this.leader(race);
     if (!me) return;
     const dist = Math.max(0, race.progress(me));
     const speed = Math.max(0, me.horse.pose().speed);
-    // 木牌计时板。
-    ctx.fillStyle = "#2c1a10";
-    ctx.beginPath();
-    ctx.roundRect(12, 12, 194, 68, 12);
-    ctx.fill();
-    const wood = ctx.createLinearGradient(0, 14, 0, 78);
-    wood.addColorStop(0, "#8f5c35");
-    wood.addColorStop(1, "#5e3820");
-    ctx.fillStyle = wood;
-    ctx.beginPath();
-    ctx.roundRect(15, 15, 188, 62, 10);
-    ctx.fill();
-    ctx.fillStyle = "#fbe9c0";
-    ctx.textAlign = "left";
-    ctx.font = "700 22px 'Noto Serif SC', serif";
+    // 计时木框。
+    pixelBox(s, 12, 12, 252, 114, PX, "wood");
     const remaining = Math.max(0, race.options.timeLimit - race.raceTime);
-    const clock = mode === "trial" ? `${remaining.toFixed(1)} 秒` : `${race.raceTime.toFixed(1)} 秒`;
-    ctx.fillText(race.started ? clock : "预备…", 26, 42);
-    ctx.font = "600 13px 'Noto Serif SC', serif";
-    ctx.fillStyle = "rgba(251,233,192,0.85)";
-    const distText = `${dist.toFixed(1)} 米`;
-    ctx.fillText(distText, 26, 64);
-    ctx.fillText(me.horse.state === "fallen" ? "摔倒" : `${(speed * 3.6).toFixed(0)} 公里/时`, 26 + ctx.measureText(distText).width + 16, 64);
+    const clock = mode === "trial" ? `${remaining.toFixed(1)}秒` : `${race.raceTime.toFixed(1)}秒`;
+    pixelText(s, race.started ? clock : "预备", 36, 24, { color: "#3b1c0e", line: null, scale: 3 });
+    pixelText(s, `${dist.toFixed(0)}米`, 36, 70, { color: "#8a5a32", line: null, scale: 2 });
+    pixelText(s, me.horse.state === "fallen" ? "摔倒" : `${(speed * 3.6).toFixed(0)}公里/时`, 240, 70, { color: me.horse.state === "fallen" ? "#d23a2a" : "#8a5a32", line: null, scale: 2, align: "right" });
 
     if (mode === "race") {
-      // 顶部进度条：每匹马一个点。
-      const x0 = 230;
+      // 顶部进度条：一根木槽，每匹马一个点。
+      const x0 = 290;
       const x1 = W - 24;
       if (x1 - x0 < 80) return;
       const y = 30;
-      ctx.strokeStyle = "rgba(251,239,217,0.35)";
-      ctx.lineWidth = 4;
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(x0, y);
-      ctx.lineTo(x1, y);
-      ctx.stroke();
+      pixelBox(s, x0 - 12, y - 12, x1 - x0 + 24, 24, PX, "plank");
+      s.fillStyle = "#3b1c0e";
+      s.fillRect(x0, y - 3, x1 - x0, 6);
       race.runners.forEach((r, i) => {
         if (i === this.opts.player) return;
         const t = Math.min(1, Math.max(0, race.progress(r) / race.options.distance));
-        ctx.fillStyle = "rgba(251,239,217,0.7)";
-        ctx.beginPath();
-        ctx.arc(x0 + (x1 - x0) * t, y, 4, 0, Math.PI * 2);
-        ctx.fill();
+        const px = Math.round(x0 + (x1 - x0) * t);
+        s.fillStyle = "#3b1c0e";
+        s.fillRect(px - 6, y - 6, 12, 12);
+        s.fillStyle = "#fbe6b8";
+        s.fillRect(px - 3, y - 3, 6, 6);
       });
       const t = Math.min(1, dist / race.options.distance);
-      ctx.fillStyle = "#f3c77b";
-      ctx.beginPath();
-      ctx.arc(x0 + (x1 - x0) * t, y, 7, 0, Math.PI * 2);
-      ctx.fill();
+      const px = Math.round(x0 + (x1 - x0) * t);
+      s.fillStyle = "#3b1c0e";
+      s.fillRect(px - 9, y - 9, 18, 18);
+      s.fillStyle = "#f6d05a";
+      s.fillRect(px - 6, y - 6, 12, 12);
+      s.fillStyle = "#d23a2a";
+      s.fillRect(px - 3, y - 3, 6, 6);
     }
   }
 
@@ -387,10 +353,9 @@ export class Stage {
     for (const d of this.dust) {
       if (d.lane !== lane) continue;
       const [x, y] = toScreen(view, d);
-      ctx.fillStyle = rgba(color, 0.25 * d.life);
-      ctx.beginPath();
-      ctx.arc(x, y, d.size * view.ppm, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.fillStyle = rgba(color, 0.35 * d.life);
+      const r = Math.max(PX, Math.round((d.size * view.ppm) / PX) * PX);
+      ctx.fillRect(Math.round(x / PX) * PX - r, Math.round(y / PX) * PX - r, r * 2, r * 2);
     }
   }
 }

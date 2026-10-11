@@ -5,7 +5,8 @@ import { drawHorsePose, lookFor } from "../render/horseArt";
 import { CATEGORY_GROUND, HorseSim, type HorsePose } from "../sim/horse";
 import { STEP } from "../sim/race";
 import { createRng, hashSeed } from "../sim/rng";
-import { project, type Camera } from "./camera";
+import { canvas, outline } from "./sprites";
+import { METERS_PER_TILE } from "./tiles";
 
 /**
  * 大世界里的一匹马。马在世界里的位置（x, z）由 AI 决定；
@@ -71,13 +72,13 @@ export class HorsePuppet {
     this.world.step(STEP, 8, 3);
   }
 
-  /** 推进 dt 秒：位置按速度走，腿的动作交给物理。 */
+  /** 推进 dt 秒：位置按速度走（格/秒），腿的动作交给物理。 */
   update(dt: number): void {
     this.x += this.vx * dt;
     this.z += this.vz * dt;
-    if (Math.abs(this.vx) > 0.2) this.facing = this.vx > 0 ? 1 : -1;
-    // 物理马跑的是「身体前进的速度」，侧着看只看得到 x 方向，但步子要配合总速度。
-    const target = this.speed / this.scale;
+    if (Math.abs(this.vx) > 0.15) this.facing = this.vx > 0 ? 1 : -1;
+    // 物理马跑的是「身体前进的速度」（米/秒）；俯视时上下走也要迈步，所以按总速度算。
+    const target = (this.speed * METERS_PER_TILE) / this.scale;
     this.acc += dt;
     let n = 0;
     while (this.acc >= STEP && n++ < 6) {
@@ -93,30 +94,32 @@ export class HorsePuppet {
     return this.sim.pose();
   }
 
-  /** 屏幕上的包围盒，用来点选。 */
-  bounds(cam: Camera): { x: number; y: number; w: number; h: number } | null {
-    const p = project(cam, this.x, this.z, 0);
-    if (!p) return null;
-    const s = p.scale * this.scale;
-    const w = (this.plan.torsoLength + this.plan.neckLength) * s * 1.1;
-    const h = (Math.max(this.plan.legFront, this.plan.legRear) + this.plan.torsoHeight + this.plan.neckLength * 0.8) * s;
-    return { x: p.x - w / 2, y: p.y - h, w, h };
-  }
+  private buf: HTMLCanvasElement | null = null;
 
-  draw(ctx: CanvasRenderingContext2D, cam: Camera, rim: string): void {
-    const p = project(cam, this.x, this.z, 0);
-    if (!p) return;
-    const ppm = p.scale * this.scale;
-    if (ppm < 0.8) return;
+  /**
+   * 画成像素小马：先在一张小画布上画出物理姿态，描一圈深色轮廓，
+   * 再贴到 (sx, sy)（脚底中心）。返回贴图占的矩形，用来点选。
+   */
+  drawPixel(ctx: CanvasRenderingContext2D, sx: number, sy: number, ppm: number): { x: number; y: number; w: number; h: number } {
+    const plan = this.plan;
+    const k = ppm * this.scale;
+    const w = Math.ceil((plan.torsoLength + plan.neckLength + plan.tailLength + 1.4) * k) + 6;
+    const h = Math.ceil((Math.max(plan.legFront, plan.legRear) + plan.torsoHeight + plan.neckLength + 0.5) * k) + 6;
+    if (!this.buf || this.buf.width !== w || this.buf.height !== h) this.buf = canvas(w, h)[0];
+    const bctx = this.buf.getContext("2d") as CanvasRenderingContext2D;
+    bctx.clearRect(0, 0, w, h);
     const pose = this.pose();
-    const view = { camX: pose.torso.x, ppm, groundY: p.y, width: 1, anchor: p.x };
+    drawHorsePose(bctx, pose, plan, lookFor(plan, "#fff3d6"), { camX: pose.torso.x, ppm: k, groundY: h - 3, width: w, anchor: 0.5 });
+    outline(this.buf, "#2a1a12", 120);
+    const x = Math.round(sx - w / 2);
+    const y = Math.round(sy - (h - 3));
     ctx.save();
     if (this.facing < 0) {
-      ctx.translate(p.x, 0);
+      ctx.translate(Math.round(sx) * 2, 0);
       ctx.scale(-1, 1);
-      ctx.translate(-p.x, 0);
     }
-    drawHorsePose(ctx, pose, this.plan, lookFor(this.plan, rim), view);
+    ctx.drawImage(this.buf, x, y);
     ctx.restore();
+    return { x, y, w, h };
   }
 }

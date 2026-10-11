@@ -1,8 +1,9 @@
-import { rgba, shade } from "../render/color";
-import { drawHorsePose, lookFor, toScreen, type View } from "../render/horseArt";
+import { shade } from "../render/color";
+import { lookFor, toScreen, type View } from "../render/horseArt";
 import { drawScene, PALETTES } from "../render/scene";
 import { STEP } from "../sim/race";
 import type { SumoBout } from "../sim/sumo";
+import { drawPixelHorse, PixelSurface, pixelBox, pixelText, PX } from "./pixelCanvas";
 
 export interface SumoViewOptions {
   /** 你的马是哪一边（0 左、1 右），观战为 null。 */
@@ -15,8 +16,7 @@ const AFTERMATH = 2.2;
 
 /** 相扑台的侧面镜头：两匹马在台上顶牛。 */
 export class SumoView {
-  private readonly canvas: HTMLCanvasElement;
-  private readonly ctx: CanvasRenderingContext2D;
+  private readonly surface: PixelSurface;
   private bout: SumoBout | null = null;
   private opts: SumoViewOptions | null = null;
   private acc = 0;
@@ -29,8 +29,7 @@ export class SumoView {
   active = false;
 
   constructor(canvas: HTMLCanvasElement) {
-    this.canvas = canvas;
-    this.ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
+    this.surface = new PixelSurface(canvas);
     this.raf = requestAnimationFrame(this.frame);
   }
 
@@ -86,13 +85,8 @@ export class SumoView {
   private render(): void {
     const bout = this.bout;
     if (!bout) return;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const W = this.canvas.clientWidth || 800;
-    const H = this.canvas.clientHeight || 450;
-    if (this.canvas.width !== Math.round(W * dpr)) this.canvas.width = Math.round(W * dpr);
-    if (this.canvas.height !== Math.round(H * dpr)) this.canvas.height = Math.round(H * dpr);
-    const ctx = this.ctx;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const { W, H } = this.surface.begin();
+    const ctx = this.surface.buf;
     const P = PALETTES.dusk;
     const R = bout.ringRadius;
     const groundY = H * 0.7;
@@ -106,9 +100,9 @@ export class SumoView {
       const x = (i / 70) * W + ((i * 37) % 11);
       const bob = Math.sin(this.wall * 4 + i) * (bout.started && !bout.finished ? 3 : 1);
       const y = H * 0.6 + ((i * 13) % 9) - bob;
-      ctx.beginPath();
-      ctx.arc(x, y, 9 + (i % 3) * 2, Math.PI, 0);
-      ctx.fill();
+      const r = 9 + (i % 3) * 3;
+      ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      ctx.fillRect(x - r * 0.4, y - r * 1.7, r * 0.8, r * 0.8);
     }
     ctx.fillStyle = shade(P.ground, -0.1);
     ctx.fillRect(0, H * 0.6, W, H * 0.4);
@@ -149,77 +143,43 @@ export class SumoView {
     const poses = bout.poses();
     poses.forEach((pose, i) => {
       const horse = bout.horses[i]!;
-      drawHorsePose(ctx, pose, horse.plan, lookFor(horse.plan, sc.rim), view);
+      drawPixelHorse(ctx, pose, horse.plan, lookFor(horse.plan, sc.rim), view);
     });
 
-    this.drawHud(ctx, W, H);
+    this.drawHud(this.surface.present(), W, H);
   }
 
   private drawHud(ctx: CanvasRenderingContext2D, W: number, H: number): void {
     const bout = this.bout as SumoBout;
     const mine = this.opts?.mine ?? null;
     const plaque = (x: number, align: "left" | "right", name: string, isMine: boolean, won: boolean | null): void => {
-      ctx.font = "400 30px 'Ma Shan Zheng', 'Noto Serif SC', serif";
-      const w = Math.max(150, ctx.measureText(name).width + 50);
+      const w = Math.max(168, name.length * 36 + 60);
       const x0 = align === "left" ? x : x - w;
-      ctx.fillStyle = "#2c1a10";
-      ctx.beginPath();
-      ctx.roundRect(x0 - 3, 13, w + 6, 58, 10);
-      ctx.fill();
-      const g = ctx.createLinearGradient(0, 16, 0, 68);
-      g.addColorStop(0, isMine ? "#b8322a" : "#8f5c35");
-      g.addColorStop(1, isMine ? "#8a2018" : "#5e3820");
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.roundRect(x0, 16, w, 52, 8);
-      ctx.fill();
-      ctx.fillStyle = "#fbe9c0";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(name, x0 + w / 2, 44);
-      ctx.textBaseline = "alphabetic";
-      if (won) stamp(ctx, align === "left" ? x0 + w + 34 : x0 - 34, 44, "胜");
+      pixelBox(ctx, x0, 12, w, 72, PX, isMine ? "red" : "plank");
+      pixelText(ctx, name, x0 + w / 2, 18, { scale: 3, align: "center" });
+      if (won) stamp(ctx, align === "left" ? x0 + w + 40 : x0 - 40, 48, "胜");
     };
     const done = bout.finished;
     plaque(16, "left", bout.entrants[0].name, mine === 0, done ? bout.winner === 0 : null);
     plaque(W - 16, "right", bout.entrants[1].name, mine === 1, done ? bout.winner === 1 : null);
-    ctx.fillStyle = "#fbe9c0";
-    ctx.font = "700 26px 'Noto Serif SC', serif";
-    ctx.textAlign = "center";
     const left = Math.max(0, bout.timeLimit - bout.boutTime);
-    ctx.fillText(bout.started ? `${Math.ceil(left)}` : "预备", W / 2, 52);
-    if (done && bout.winner === null) {
-      ctx.font = "400 64px 'Ma Shan Zheng', serif";
-      ctx.fillText("平局", W / 2, H * 0.3);
-    } else if (done) {
-      const reason = bout.reason === "flip" ? "掀翻" : bout.reason === "ringout" ? "推出圈" : "判定";
-      ctx.font = "400 56px 'Ma Shan Zheng', serif";
-      ctx.lineWidth = 6;
-      ctx.strokeStyle = "rgba(30,18,12,0.6)";
-      ctx.strokeText(reason, W / 2, H * 0.3);
-      ctx.fillStyle = "#fbe9c0";
-      ctx.fillText(reason, W / 2, H * 0.3);
+    pixelBox(ctx, W / 2 - 54, 12, 108, 72, PX, "wood");
+    pixelText(ctx, bout.started ? `${Math.ceil(left)}` : "预备", W / 2, 24, { scale: 3, align: "center", color: "#3b1c0e", line: null });
+    if (done) {
+      const text = bout.winner === null ? "平局" : bout.reason === "flip" ? "掀翻" : bout.reason === "ringout" ? "推出圈" : "判定";
+      pixelText(ctx, text, W / 2, H * 0.22, { scale: 6, align: "center" });
     }
-    ctx.fillStyle = rgba("#000000", 0);
   }
 }
 
-/** 红色印章。 */
+/** 红色印章：像素方块，四边一圈浅色线。 */
 export function stamp(ctx: CanvasRenderingContext2D, x: number, y: number, text: string): void {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(-0.12);
-  ctx.fillStyle = "#b8322a";
-  ctx.beginPath();
-  ctx.roundRect(-24, -24, 48, 48, 6);
-  ctx.fill();
-  ctx.strokeStyle = "#f6e2c8";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(-19, -19, 38, 38);
-  ctx.fillStyle = "#f6e2c8";
-  ctx.font = "400 30px 'Ma Shan Zheng', serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(text, 0, 2);
-  ctx.restore();
+  const u = PX;
+  pixelBox(ctx, x - 30, y - 30, 60, 60, u, "red");
+  ctx.fillStyle = "#fff2d0";
+  ctx.fillRect(x - 22, y - 22, 44, u);
+  ctx.fillRect(x - 22, y + 22 - u, 44, u);
+  ctx.fillRect(x - 22, y - 22, u, 44);
+  ctx.fillRect(x + 22 - u, y - 22, u, 44);
+  pixelText(ctx, text, x, y - 22, { scale: 3, align: "center", line: null });
 }

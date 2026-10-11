@@ -112,7 +112,7 @@ export interface GameState {
 
 const SAVE_KEY = "tianma.save.v2";
 export const STABLE_LIMIT = 12;
-export const HOME = { x: 4, z: 14 };
+export const HOME = { x: 13.5, z: 50.5 };
 
 const emptyRecord = (): HorseRecord => ({ trials: 0, bestTrial: 0, falls: 0 });
 

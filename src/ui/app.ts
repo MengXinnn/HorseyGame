@@ -46,9 +46,11 @@ import {
   type NightReport,
   type StableHorse,
 } from "../game/state";
-import { INTERACTS, type InteractId } from "../world/map";
+import { INTERACTS, type InteractId } from "../world/tiles";
 import { WorldScene } from "../world/world";
 import { drawPortrait } from "./portrait";
+import { drawDial, ico, installPixelUI } from "./pixelui";
+import { portraitURL } from "../world/sprites";
 import { Stage } from "./stage";
 import { SumoView } from "./sumoView";
 
@@ -75,15 +77,18 @@ const cn = (n: number): string => {
   return `${t > 1 ? DIGITS[t] : ""}十${u ? DIGITS[u] : ""}`;
 };
 
-const money = (n: number): string => `<span class="coin-num"><i class="coin"></i>${n.toLocaleString("zh-CN")}</span>`;
+const money = (n: number): string => `<span class="coin-num">${ico("coin")}${n.toLocaleString("zh-CN")}</span>`;
 
-const ICON = {
-  x: `<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg>`,
-  horse: `<svg viewBox="0 0 32 32"><path fill="currentColor" d="M9 29l2.2-9.6c-2.8-1.7-3.9-5.2-2.4-8.6L12.4 4l1.8 3.2c4.6-.6 9.3 1.6 11.4 6.2l1.6 3.9c.5 1.3-.2 2.7-1.6 2.9-.9.1-1.6-.3-2.2-.9l-2.3-2.4-1.1 12z"/><circle cx="17.5" cy="11.5" r="1.3" fill="#2c1a10"/></svg>`,
-  menu: `<svg viewBox="0 0 24 24"><path d="M5 7h14M5 12h14M5 17h14" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>`,
-  rope: `<svg viewBox="0 0 32 32"><ellipse cx="16" cy="13" rx="10" ry="7" fill="none" stroke="currentColor" stroke-width="3"/><ellipse cx="16" cy="13" rx="6" ry="3.6" fill="none" stroke="currentColor" stroke-width="2.4" opacity=".75"/><path d="M22 18c2 4 1 8-3 11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>`,
-  shoe: `<svg viewBox="0 0 24 24"><path d="M6 20V11a6 6 0 0112 0v9h-3.4v-8.6a2.6 2.6 0 00-5.2 0V20z" fill="currentColor"/></svg>`,
+/** 钱袋里一格一个数字，前面空格补齐。 */
+const goldCells = (n: number): string => {
+  const digits = String(Math.max(0, Math.floor(n))).padStart(7, " ").slice(-8);
+  return [...digits].map((d) => `<b class="cell">${d === " " ? "" : d}</b>`).join("");
 };
+
+const EVENT_ICON: Record<EventKind, "flag" | "ring" | "crown"> = { race: "flag", sumo: "ring", boss: "crown" };
+
+/** 说话的人有头像的就配上。 */
+const PORTRAIT: Record<string, "laozhao" | "madong"> = { 老赵: "laozhao", 马董: "madong" };
 
 const EVENT_GLYPH: Record<EventKind, string> = { race: "跑", sumo: "扑", boss: "擂" };
 
@@ -99,6 +104,7 @@ interface PanelOptions {
 }
 
 export function startApp(root: HTMLElement): void {
+  installPixelUI();
   let game: GameState = loadGame();
   let mode: "world" | "event" = "world";
   let toastTimer = 0;
@@ -110,35 +116,33 @@ export function startApp(root: HTMLElement): void {
       <canvas id="race" class="view" hidden aria-label="赛场"></canvas>
       <canvas id="sumo" class="view" hidden aria-label="相扑台"></canvas>
       <div class="hud" id="hud">
-        <div class="hud-tl">
-          <div class="plaque day-plaque"><b id="h-day"></b><span class="dial" id="h-dial"><i class="orb"></i></span><span class="clock" id="h-clock"></span></div>
+        <div class="clockbox">
+          <div class="cb-main">
+            <canvas class="cb-dial" id="h-dial" width="20" height="34"></canvas>
+            <div class="cb-info">
+              <div class="cb-date" id="h-day"></div>
+              <div class="cb-event" id="h-event"></div>
+              <div class="cb-time" id="h-clock"></div>
+            </div>
+          </div>
+          <div class="cb-gold" id="h-money" title="钱"></div>
         </div>
-        <div class="hud-tc"><div class="event-flag" id="h-event"></div></div>
-        <div class="hud-tr">
-          <div class="plaque purse" title="钱"><b id="h-money"></b></div>
-          <div class="debt" id="h-debt"></div>
-        </div>
-        <div class="hud-bl">
-          <div class="lassos" id="h-lasso" title="今天剩下的套索"></div>
-          <div class="rep" id="h-rep"></div>
-        </div>
-        <div class="hud-br">
-          <button class="round-btn" id="b-stable" aria-label="马厩">${ICON.horse}<span>马厩</span></button>
-          <button class="round-btn small" id="b-menu" aria-label="菜单">${ICON.menu}</button>
-        </div>
+        <div class="debt-note" id="h-debt"></div>
+        <div class="toolbar" id="toolbar"></div>
         <div class="keys" id="h-keys" hidden>
           <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>走</span>
           <span><kbd>Shift</kbd>跑</span>
           <span><kbd>E</kbd>动作</span>
+          <span><kbd>Tab</kbd>马厩</span>
         </div>
       </div>
       <div class="event-bar" id="event-bar" hidden>
         <button class="chip-btn" data-speed="1">1×</button>
         <button class="chip-btn" data-speed="2">2×</button>
         <button class="chip-btn" data-speed="4">4×</button>
-        <button class="chip-btn skip" id="b-skip">跳过</button>
+        <button class="btn sm" id="b-skip">跳过</button>
       </div>
-      <div class="veil" id="veil" hidden><div class="scroll" id="panel" role="dialog"></div></div>
+      <div class="veil" id="veil" hidden><div class="menu-frame" id="panel" role="dialog"></div></div>
       <div class="talk" id="talk" hidden></div>
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
       <div class="curtain" id="curtain"></div>
@@ -199,31 +203,49 @@ export function startApp(root: HTMLElement): void {
     const kind = eventFor(game.day);
     $("#h-day").textContent = `第${cn(game.day)}天`;
     $("#h-clock").textContent = formatClock(game.clock);
-    // 表盘：太阳从 6 点爬到 24 点，傍晚 7 点以后换成月亮。
-    const t = Math.max(0, Math.min(1, (game.clock - 360) / (MIDNIGHT - 360)));
-    const dial = $("#h-dial");
-    dial.style.setProperty("--t", t.toFixed(3));
-    dial.classList.toggle("night", game.clock >= 19 * 60);
+    drawDial($<HTMLCanvasElement>("#h-dial"), (game.clock - 360) / (MIDNIGHT - 360));
     const done = !!game.flags[`ev:${game.day}`];
     const entered = game.entry?.day === game.day;
     const bet = game.bet?.day === game.day;
     const soon = !done && game.clock >= EVENT_TIME - 120;
     const ev = $("#h-event");
-    ev.className = `event-flag ${kind}${soon ? " soon" : ""}${done ? " done" : ""}`;
-    ev.title = done ? "今天的赛事结束了" : `${EVENT_LABELS[kind]} 傍晚 5 点开赛`;
-    ev.innerHTML = `<span class="glyph">${EVENT_GLYPH[kind]}</span><span class="ev-name">${EVENT_LABELS[kind]}</span><span class="ev-time">${done ? "散场" : "17:00"}</span>${entered ? `<span class="mini-seal">报</span>` : ""}${bet ? `<span class="mini-seal gold">注</span>` : ""}`;
-    $("#h-money").innerHTML = money(game.money);
+    ev.className = `cb-event ${kind}${soon ? " soon" : ""}${done ? " done" : ""}`;
+    ev.title = done ? "今天的赛事结束了" : `${EVENT_LABELS[kind]}　傍晚五点开赛`;
+    ev.innerHTML = `${ico(EVENT_ICON[kind])}<span>${EVENT_LABELS[kind]}</span>${entered ? `<i class="seal-chip" title="已报名">报</i>` : ""}${bet ? `<i class="seal-chip gold" title="已下注">注</i>` : ""}`;
+    $("#h-money").innerHTML = goldCells(game.money);
     const due = debtDue(game.day);
     const left = daysUntilDebt(game.day);
     const debt = $("#h-debt");
     debt.hidden = due <= 0;
     debt.classList.toggle("urgent", left <= 1);
-    debt.title = `第 ${weekOf(game.day)} 周要还 ¥${due}`;
-    debt.innerHTML = `<span class="seal">债</span><b>${due.toLocaleString("zh-CN")}</b><small>${left === 0 ? "今夜" : `${left}天`}</small>`;
-    $("#h-lasso").innerHTML = Array.from({ length: 3 }, (_, i) => `<span class="coil ${i < game.lassos ? "" : "used"}">${ICON.rope}</span>`).join("");
-    const rep = $("#h-rep");
-    rep.innerHTML = `${ICON.shoe}<b>${game.reputation}</b>`;
-    rep.title = `名望 ${game.reputation}　下注上限 ¥${betLimit(game.reputation)}`;
+    debt.title = `第${cn(weekOf(game.day))}周要还给马董`;
+    debt.innerHTML = `<i class="seal-chip">债</i><b>${due.toLocaleString("zh-CN")}</b><small>${left === 0 ? "今夜" : `${left}天`}</small>`;
+    toolbar();
+  };
+
+  /** 底部工具栏：套索、名望、马厩里的马、马厩和菜单。 */
+  const TOOLBAR_HORSES = 6;
+  let toolbarKey = "";
+  const toolbar = (): void => {
+    const horses = game.horses.slice(0, TOOLBAR_HORSES);
+    const key = JSON.stringify([game.lassos, game.reputation, horses.map((h) => [h.id, h.name, game.selectedId === h.id])]);
+    if (key === toolbarKey) return;
+    toolbarKey = key;
+    const tb = $("#toolbar");
+    tb.innerHTML = `
+      <span class="tslot${game.lassos ? "" : " empty"}" title="今天剩下的套索">${ico("rope")}<b class="stack">${game.lassos}</b></span>
+      <span class="tslot" title="名望　下注上限 ${betLimit(game.reputation)}">${ico("shoe")}<b class="stack">${game.reputation}</b></span>
+      <i class="tsep"></i>
+      ${Array.from({ length: TOOLBAR_HORSES }, (_, i) => {
+        const h = horses[i];
+        return h
+          ? `<button class="tslot horse${game.selectedId === h.id ? " on" : ""}" data-horse="${h.id}" title="${esc(h.name)}"><canvas data-pt="${h.id}"></canvas><small class="num">${i + 1}</small></button>`
+          : `<span class="tslot"><small class="num">${i + 1}</small></span>`;
+      }).join("")}
+      <i class="tsep"></i>
+      <button class="tslot" id="b-stable" title="马厩（Tab）">${ico("horse")}</button>
+      <button class="tslot" id="b-menu" title="菜单（Esc）">${ico("menu")}</button>`;
+    drawPortraits(tb);
   };
 
   /* ---------------- 面板 ---------------- */
@@ -237,7 +259,7 @@ export function startApp(root: HTMLElement): void {
   const drawPortraits = (scope: ParentNode): void => {
     scope.querySelectorAll<HTMLCanvasElement>("canvas[data-pt]").forEach((c) => {
       const g = portraitOf(c.dataset.pt as string);
-      if (g) drawPortrait(c, g, "noon");
+      if (g) drawPortrait(c, g, "noon", c.dataset.bust !== undefined);
     });
   };
 
@@ -245,11 +267,11 @@ export function startApp(root: HTMLElement): void {
     const fresh = veil.hidden;
     veil.hidden = false;
     closable = opts.closable !== false;
-    panelEl.className = `scroll${opts.cls ? ` ${opts.cls}` : ""}${fresh ? " enter" : ""}`;
+    panelEl.className = `menu-frame${opts.cls ? ` ${opts.cls}` : ""}${fresh ? " enter" : ""}`;
     panelEl.innerHTML = `
-      ${title ? `<h2 class="s-title"><span>${title}</span></h2>` : ""}
-      ${closable ? `<button class="seal-x" data-act="close" aria-label="关闭">${ICON.x}</button>` : ""}
-      <div class="s-body">${body}</div>`;
+      ${title ? `<h2 class="m-title"><span>${title}</span></h2>` : ""}
+      ${closable ? `<button class="m-x" data-act="close" aria-label="关闭">${ico("close")}</button>` : ""}
+      <div class="m-body">${body}</div>`;
     actions = { close: () => closePanel(), ...acts };
     onPanelClose = opts.onClose ?? null;
     world.paused = true;
@@ -295,7 +317,10 @@ export function startApp(root: HTMLElement): void {
     renderTalk();
   };
   const renderTalk = (): void => {
-    talkEl.innerHTML = `<div class="t-name">${esc(talkEl.dataset.name ?? "")}</div><p>${esc(talkLines[talkIndex] ?? "")}</p><span class="t-more"></span>`;
+    const name = talkEl.dataset.name ?? "";
+    const who = PORTRAIT[name];
+    talkEl.innerHTML = `<div class="t-text"><p>${esc(talkLines[talkIndex] ?? "")}</p><span class="t-more"></span></div>
+      ${who ? `<div class="t-face"><span class="t-pic"><img src="${portraitURL(who)}" alt="" /></span><span class="t-name">${esc(name)}</span></div>` : ""}`;
   };
   const advanceTalk = (): void => {
     if (performance.now() - talkOpened < 200) return;
@@ -407,7 +432,7 @@ export function startApp(root: HTMLElement): void {
       `<div class="d-head">
         <span class="frame big"><canvas data-pt="${h.id}"></canvas></span>
         <div class="d-id">
-          <h3 class="brush">${esc(h.name)}</h3>
+          <h3 class="title-txt">${esc(h.name)}</h3>
           <p>${parts(h.generation ? `第${cn(h.generation)}代` : "初代", `${coatFor(p.coat).name}马`, `${Math.round(plan.totalMass)}公斤`)}</p>
           ${h.parents ? `<p class="lineage">${esc(h.parents[0])} <i>×</i> ${esc(h.parents[1])}</p>` : ""}
           <p class="tags">${horseTags(h)}</p>
@@ -729,7 +754,7 @@ export function startApp(root: HTMLElement): void {
       "",
       `<div class="caught">
         <span class="frame big"><canvas data-pt="${h.id}"></canvas></span>
-        <h3 class="brush">${esc(h.name)}</h3>
+        <h3 class="title-txt">${esc(h.name)}</h3>
         <span class="stamp-big">入厩</span>
       </div>
       <div class="row center"><button class="btn big" data-act="close">好</button></div>`,
@@ -866,7 +891,7 @@ export function startApp(root: HTMLElement): void {
     world.paused = false;
     if (venue) {
       const spot = INTERACTS.find((i) => i.id === venue);
-      if (spot) world.teleport(spot.x, spot.z - 2.5);
+      if (spot) world.teleport(spot.x, spot.z + 1);
     }
     persist();
     hud();
@@ -892,7 +917,7 @@ export function startApp(root: HTMLElement): void {
         panel(
           "",
           `<div class="trial-res">
-            <h3 class="brush">${esc(h.name)}</h3>
+            <h3 class="title-txt">${esc(h.name)}</h3>
             <div class="big-num">${res.distance.toFixed(1)}<small>米</small></div>
             <p>${parts(`${((res.distance / TRIAL_SECONDS) * 3.6).toFixed(0)}公里/时`, res.falls > 0 && `<span class="tag red">摔倒</span>`, res.stalls > 0 && `<span class="tag">发呆</span>`)}</p>
             ${res.distance > prev && prev > 0 ? `<span class="stamp-big">新纪录</span>` : ""}
@@ -922,7 +947,7 @@ export function startApp(root: HTMLElement): void {
       "",
       `<div class="drum">
         <span class="drum-glyph">${EVENT_GLYPH[kind]}</span>
-        <h3 class="brush">${EVENT_LABELS[kind]}</h3>
+        <h3 class="title-txt">${EVENT_LABELS[kind]}</h3>
         <p class="drum-sub">开赛</p>
       </div>
       <div class="row center">${mine ? "" : `<button class="btn wood big" data-act="close">不看</button>`}<button class="btn big" data-act="go">入场</button></div>`,
@@ -1019,7 +1044,7 @@ export function startApp(root: HTMLElement): void {
     ].join("");
     panel(
       "",
-      `<h3 class="brush headline${out.myRank === 1 ? " win" : ""}">${headline}</h3>
+      `<h3 class="title-txt headline${out.myRank === 1 ? " win" : ""}">${headline}</h3>
        ${board}
        ${gains ? `<div class="gains">${gains}</div>` : ""}
        <div class="row center"><button class="btn big" data-act="close">离场</button></div>`,
@@ -1081,7 +1106,7 @@ export function startApp(root: HTMLElement): void {
       "",
       `<div class="letter">
         ${LETTER.map((l) => `<p>${esc(l)}</p>`).join("")}
-        <div class="sign"><span>马董</span><span class="seal-sign">董</span></div>
+        <div class="sign"><img class="letter-face" src="${portraitURL("madong")}" alt="" /><span>马董</span><span class="seal-sign">董</span></div>
       </div>
       <div class="row center"><button class="btn big" data-act="close">收下</button></div>`,
       {},
@@ -1097,11 +1122,20 @@ export function startApp(root: HTMLElement): void {
     );
   };
 
-  $("#b-stable").addEventListener("click", () => {
-    if (mode === "world" && talkEl.hidden) openStable();
+  $("#toolbar").addEventListener("click", (e) => {
+    if (mode !== "world" || !talkEl.hidden) return;
+    const el = (e.target as HTMLElement).closest<HTMLElement>("button");
+    if (!el) return;
+    if (el.id === "b-stable") openStable();
+    else if (el.id === "b-menu") openMenu();
+    else if (el.dataset.horse) openDetail(el.dataset.horse);
   });
-  $("#b-menu").addEventListener("click", () => {
-    if (mode === "world" && talkEl.hidden) openMenu();
+  window.addEventListener("keydown", (e) => {
+    if (mode !== "world" || !talkEl.hidden || !veil.hidden) return;
+    if ((e.target as HTMLElement | null)?.closest("input, textarea")) return;
+    const n = Number(e.key);
+    const h = n >= 1 && n <= TOOLBAR_HORSES ? game.horses[n - 1] : undefined;
+    if (h) openDetail(h.id);
   });
 
   /* ---------------- 钟点 ---------------- */
