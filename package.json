@@ -1,0 +1,23 @@
+{
+  "name": "tianma-xingkong",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "天马行空：物理驱动的育马沙盒网页游戏",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "sim:stability": "vitest run --config vitest.stability.config.ts"
+  },
+  "dependencies": {
+    "planck": "^1.5.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^7.3.7",
+    "vitest": "^4.1.11"
+  }
+}
