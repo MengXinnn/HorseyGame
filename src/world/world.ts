@@ -29,7 +29,8 @@ import {
   type Prop,
   type PropKind,
 } from "./tiles";
-import { bakeGround, canvas, icon, personFrame, textSprite, PLAYER_LOOK, type Dir, type PersonLook } from "./sprites";
+import { banner, bubble, floatText, nameTag } from "./labels";
+import { bakeGround, canvas, icon, personFrame, PLAYER_LOOK, type Dir, type PersonLook } from "./sprites";
 import { propSprite } from "./props";
 import { bakeBuildingShadows, buildingSprite } from "./buildingArt";
 import { HorsePuppet } from "./puppet";
@@ -170,6 +171,11 @@ export class WorldScene {
   private walkPhase = 0;
   private time = 0;
   private hits: Hit[] = [];
+  /** 放大以后画在屏幕上的字（名牌、气泡、飘字），参数是屏幕画布。 */
+  private labels: Array<(s: CanvasRenderingContext2D) => void> = [];
+  /** 设备像素：一个美术像素多大（zoom × dpr），一个字像素多大。 */
+  private screenPx = 3;
+  private textPx = 2;
   private nearby: Interactable | null = null;
   private region = "";
   private banner: { text: string; t: number } | null = null;
@@ -688,6 +694,10 @@ export class WorldScene {
     const cx = this.camX;
     const cy = this.camY;
     this.hits = [];
+    this.labels = [];
+    this.screenPx = this.zoom * dpr;
+    // 字按 24px 的大小画（一个字像素两个 CSS 像素），比美术像素细一档，和界面上的字一样大。
+    this.textPx = Math.max(2, Math.round(2 * dpr));
     const amb = ambientAt(this.shown);
     const t = this.time;
 
@@ -835,7 +845,12 @@ export class WorldScene {
           if (onClick) this.hits.push({ ...r, act: onClick });
           // 马头顶的高度：按体型估，不用缓冲画布的上沿（那里留了空白）。
           const top = Math.round(y - cy - 2.5 * HORSE_PPM * h.scale);
-          if (tag && Math.hypot(h.x - s.player.x, h.z - s.player.z) < 5) nameTag(b, x - cx, top - 2, tag);
+          if (tag && Math.hypot(h.x - s.player.x, h.z - s.player.z) < 5) {
+            // 名牌放在画出来的马最高处（头或耳朵）上面一点，居中对着马身。
+            const head = Math.round(y - cy) - h.headHeight();
+            const [sx, sy, k] = [Math.round(x - cx) * this.screenPx, (head - 3) * this.screenPx, this.textPx];
+            this.labels.push((sc) => nameTag(sc, sx, sy, tag, k));
+          }
           if (mark) drawArrow(b, Math.round(x - cx), top - 10 + Math.round(Math.sin(t * 6) * 1.5));
         },
       });
@@ -881,6 +896,8 @@ export class WorldScene {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(this.buf, 0, 0, bw, bh, 0, 0, bw * this.zoom * dpr, bh * this.zoom * dpr);
+    for (const l of this.labels) l(ctx);
+    ctx.globalAlpha = 1;
   }
 
   /**
@@ -958,7 +975,8 @@ export class WorldScene {
     r.globalCompositeOperation = "source-over";
     b.globalAlpha = 0.55;
     for (let y = Math.max(0, minY); y < Math.min(bh, maxY); y++) {
-      const off = Math.round(Math.sin(y * 0.5 + this.time * 2.4) * 1.1);
+      // 波纹的相位跟着地图上的行走，不跟屏幕行：镜头上下移动时波纹不会跟着快速滚动。
+      const off = Math.round(Math.sin((y + cy) * 0.5 + this.time * 2.4) * 1.1);
       b.drawImage(this.rbuf, 0, y, bw, 1, off, y, bw, 1);
     }
     b.globalAlpha = 1;
@@ -1015,28 +1033,39 @@ export class WorldScene {
   }
 
   private drawOverlay(b: CanvasRenderingContext2D, cx: number, cy: number, bw: number, bh: number): void {
-    b.textBaseline = "top";
+    const Z = this.screenPx;
+    const k = this.textPx;
     for (const f of this.float) {
-      const x = f.x * TILE - cx;
-      const y = f.z * TILE - cy - 36 - f.t * 12;
-      b.globalAlpha = Math.max(0, 1 - f.t / 1.6);
-      outlinedText(b, f.text, Math.round(x), Math.round(y), f.color);
-      b.globalAlpha = 1;
+      const x = (f.x * TILE - cx) * Z;
+      const y = (f.z * TILE - cy - 36) * Z - f.t * 12 * k;
+      const alpha = Math.max(0, 1 - f.t / 1.6);
+      this.labels.push((sc) => {
+        sc.globalAlpha = alpha;
+        floatText(sc, x, y, f.text, f.color, k);
+        sc.globalAlpha = 1;
+      });
     }
     if (this.nearby && !this.tug) {
       const it = this.nearby;
-      const r = bubble(b, Math.round(it.x * TILE - cx), Math.round(it.z * TILE - cy - 30), it.label);
-      this.hits.push({ ...r, act: () => this.hooks.onInteract(it.id) });
+      const x = Math.round(it.x * TILE - cx) * Z;
+      const y = Math.round(it.z * TILE - cy - 30) * Z;
+      this.labels.push((sc) => {
+        const r = bubble(sc, x, y, it.label, k);
+        // 点击区域按缓冲坐标记。
+        this.hits.push({ x: r.x / Z, y: r.y / Z, w: r.w / Z, h: r.h / Z, act: () => this.hooks.onInteract(it.id) });
+      });
     }
-    if (this.tug) drawTugGauge(b, bw, bh, this.tug);
+    if (this.tug) {
+      const y0 = drawTugGauge(b, bw, bh, this.tug);
+      this.labels.push((sc) => floatText(sc, (bw / 2) * Z, (y0 - 11) * Z - (13 * k) / 2, "按住拉绳", "#fbefd4", k));
+    }
     if (this.banner) {
       const t = this.banner.t;
       const slide = t < 0.3 ? (0.3 - t) / 0.3 : t > 2.2 ? (t - 2.2) / 0.4 : 0;
-      const w = Math.ceil(b.measureText(this.banner.text).width) + 28;
-      const x = Math.round(bw / 2 - w / 2);
-      const y = Math.round(8 - slide * 40);
-      woodPlank(b, x, y, w, 20);
-      outlinedText(b, this.banner.text, Math.round(bw / 2), y + 4, "#fbefd4");
+      // 地名木牌和界面上的标题一样大：一个字像素三个 CSS 像素。
+      const K = Math.round((3 * Z) / this.zoom);
+      const text = this.banner.text;
+      this.labels.push((sc) => banner(sc, (bw / 2) * Z, (8 - slide * 40) * K, text, K));
     }
   }
 }
@@ -1271,21 +1300,6 @@ function drawFlag(b: CanvasRenderingContext2D, img: HTMLCanvasElement, x: number
   }
 }
 
-function outlinedText(b: CanvasRenderingContext2D, text: string, x: number, y: number, color: string): void {
-  const t = textSprite(text, color, "#2a1a12");
-  b.drawImage(t, Math.round(x - t.width / 2), y - 2);
-}
-
-function nameTag(b: CanvasRenderingContext2D, x: number, y: number, text: string): void {
-  const t = textSprite(text, "#fbefd4");
-  const w = t.width;
-  const x0 = Math.round(x - w / 2);
-  b.fillStyle = "#2a1a12";
-  b.fillRect(x0, y - 15, w, 13);
-  b.fillRect(x0 - 1, y - 14, w + 2, 11);
-  b.drawImage(t, x0, y - 16);
-}
-
 function woodPlank(b: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
   b.fillStyle = "#2a1a12";
   b.fillRect(x - 1, y - 1, w + 2, h + 2);
@@ -1300,47 +1314,13 @@ function woodPlank(b: CanvasRenderingContext2D, x: number, y: number, w: number,
   b.fillRect(x + w - 5, y + h / 2 - 1, 2, 2);
 }
 
-/** 互动提示：一个对话气泡，按键 E 加动作名。 */
-function bubble(b: CanvasRenderingContext2D, x: number, y: number, label: string): { x: number; y: number; w: number; h: number } {
-  const tw = textSprite(label, "#2a1a12").width;
-  const w = tw + 18;
-  const h = 17;
-  const x0 = Math.round(x - w / 2);
-  const y0 = y - h;
-  b.fillStyle = "#2a1a12";
-  b.fillRect(x0 - 1, y0, w + 2, h);
-  b.fillRect(x0, y0 - 1, w, h + 2);
-  b.fillStyle = "#fff6e0";
-  b.fillRect(x0, y0, w, h);
-  b.fillStyle = "#e8cf9c";
-  b.fillRect(x0, y0 + h - 2, w, 2);
-  // 键帽
-  b.fillStyle = "#2a1a12";
-  b.fillRect(x0 + 2, y0 + 2, 13, 13);
-  b.fillStyle = "#f6d05a";
-  b.fillRect(x0 + 3, y0 + 3, 11, 10);
-  const k = textSprite("E", "#2a1a12");
-  b.drawImage(k, Math.round(x0 + 8.5 - k.width / 2) + 1, y0);
-  b.drawImage(textSprite(label, "#2a1a12"), x0 + 16, y0);
-  // 气泡尖
-  b.fillStyle = "#2a1a12";
-  b.fillRect(x - 3, y0 + h, 7, 2);
-  b.fillRect(x - 2, y0 + h + 2, 5, 2);
-  b.fillStyle = "#fff6e0";
-  b.fillRect(x - 2, y0 + h, 5, 1);
-  b.fillRect(x - 1, y0 + h + 1, 3, 2);
-  return { x: x0, y: y0, w, h: h + 4 };
-}
-
-/** 拔河仪表：木框里一根张力条，绿区里才算拉近。 */
-function drawTugGauge(b: CanvasRenderingContext2D, bw: number, bh: number, tug: Tug): void {
+/** 拔河仪表：木框里一根张力条，绿区里才算拉近。画在缓冲里，返回张力条的顶边（字另外画在屏幕上）。 */
+function drawTugGauge(b: CanvasRenderingContext2D, bw: number, bh: number, tug: Tug): number {
   const w = Math.min(150, bw - 20);
   const x0 = Math.round(bw / 2 - w / 2);
   const y0 = bh - 64;
   woodPlank(b, x0 - 8, y0 - 18, w + 16, 46);
   b.drawImage(icon("rope"), x0 - 4, y0 - 16);
-  b.textBaseline = "top";
-  outlinedText(b, "按住拉绳", Math.round(bw / 2), y0 - 15, "#fbefd4");
   b.fillStyle = "#2a1a12";
   b.fillRect(x0 - 1, y0 - 1, w + 2, 12);
   b.fillStyle = "#4a3020";
@@ -1359,4 +1339,5 @@ function drawTugGauge(b: CanvasRenderingContext2D, bw: number, bh: number, tug: 
   b.fillRect(x0, y0 + 15, w, 4);
   b.fillStyle = "#f6d05a";
   b.fillRect(x0, y0 + 15, Math.round(w * Math.min(1, tug.progress)), 4);
+  return y0;
 }

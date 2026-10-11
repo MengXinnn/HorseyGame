@@ -122,4 +122,26 @@ export class HorsePuppet {
     ctx.restore();
     return { x, y, w, h };
   }
+
+  private inkTop = -1;
+
+  /**
+   * 上一次 drawPixel 画出来的马，最高的不透明像素离脚底多高（缓冲像素）。名牌就放在它上面。
+   * 低头抬头时会变，慢慢跟过去，免得名牌一跳一跳。
+   */
+  headHeight(): number {
+    const c = this.buf;
+    if (!c) return 0;
+    const { width: w, height: h } = c;
+    const d = (c.getContext("2d") as CanvasRenderingContext2D).getImageData(0, 0, w, h).data;
+    let row = h - 3;
+    for (let i = 3; i < d.length; i += 4)
+      if (d[i]! > 0) {
+        row = Math.floor((i - 3) / 4 / w);
+        break;
+      }
+    const height = h - 3 - row;
+    this.inkTop = this.inkTop < 0 ? height : this.inkTop + (height - this.inkTop) * 0.15;
+    return Math.round(this.inkTop);
+  }
 }

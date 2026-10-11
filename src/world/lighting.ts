@@ -128,10 +128,10 @@ function cloudTexture(): HTMLCanvasElement {
   for (let y = 0; y < size; y++)
     for (let x = 0; x < size; x++) {
       const n = big(x, y) * 0.6 + mid(x, y) * 0.3 + small(x, y) * 0.1;
-      // 只留下最浓的几片，边缘抖动。
-      const k = (n - 0.56) / 0.12 + (bayer(x, y) - 0.5) * 0.9;
+      // 只留下最浓的几片（大约一成多的地面），边缘窄窄地抖一圈。
+      const k = (n - 0.72) / 0.06 + (bayer(x, y) - 0.5) * 0.5;
       if (k <= 0) continue;
-      const a = k > 1 ? 0.2 : 0.11;
+      const a = k > 1 ? 0.13 : 0.07;
       ras.data[y * size + x] = ((Math.round(a * 255) << 24) | (shadow & 0xffffff)) >>> 0;
     }
   return ras.toCanvas();
