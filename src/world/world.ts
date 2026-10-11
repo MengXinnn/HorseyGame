@@ -1,4 +1,3 @@
-import { mix } from "../render/color";
 import { hashSeed } from "../sim/rng";
 import { express } from "../genome/genome";
 import { addCaught, canCatch, HOME, isFoal, wildHerd, type GameState } from "../game/state";
@@ -24,23 +23,19 @@ import {
   YARD,
   FENCES,
   crossesFence,
+  type Fence,
   type Interactable,
   type InteractId,
+  type Prop,
+  type PropKind,
 } from "./tiles";
-import {
-  bakeGround,
-  buildingSprite,
-  canvas,
-  icon,
-  personFrame,
-  textSprite,
-  PLAYER_LOOK,
-  propSprite,
-  type Dir,
-  type PersonLook,
-} from "./sprites";
+import { bakeGround, canvas, icon, personFrame, textSprite, PLAYER_LOOK, type Dir, type PersonLook } from "./sprites";
+import { propSprite } from "./props";
+import { bakeBuildingShadows, buildingSprite } from "./buildingArt";
 import { HorsePuppet } from "./puppet";
-import { Ambient, drawChimney } from "./ambient";
+import { Ambient } from "./ambient";
+import { ambientAt, Lighting, type Light } from "./lighting";
+import { Minimap, type MapMarks } from "./minimap";
 
 export interface WorldHooks {
   onInteract(id: InteractId): void;
@@ -59,16 +54,25 @@ interface Npc {
 }
 
 const NPCS: Npc[] = [
+  // 老赵，擂台边上。
   { look: { hat: "none", hair: "#e8e2d6", skin: "#d9a070", shirt: "#6b3b2a", shirtDark: "#4a2618", pants: "#3a2a20", beard: true, wide: true }, x: LAOZHAO_SPOT.x, z: LAOZHAO_SPOT.z, dir: "down" },
-  { look: { hat: "cap", hair: "#2a1a12", skin: "#e2b893", shirt: "#8e2519", shirtDark: "#5e1810", pants: "#2a2a30" }, x: 46.6, z: 10.8, dir: "down" },
-  { look: { hat: "none", hair: "#3a3a3a", skin: "#ecc6a0", shirt: "#f4f0e6", shirtDark: "#c8c2b4", pants: "#3f4a52" }, x: 56, z: 9.9, dir: "down" },
-  { look: { hat: "straw", hair: "#3a2414", skin: "#d8a77e", shirt: "#5a7a3a", shirtDark: "#3e5828", pants: "#4a3a2e" }, x: 69, z: 10.8, dir: "down" },
-  { look: { hat: "bun", hair: "#2a1a12", skin: "#f0c8a4", shirt: "#c9302a", shirtDark: "#8e2519", pants: "#3a2a20" }, x: 31.8, z: 24.9, dir: "left" },
+  // 赌马的伙计、研究所的研究员、马市的贩子、报名处的姑娘。
+  { look: { hat: "cap", hair: "#2a1a12", skin: "#e2b893", shirt: "#8e2519", shirtDark: "#5e1810", pants: "#2a2a30" }, x: 38.8, z: 11.6, dir: "down" },
+  { look: { hat: "none", hair: "#3a3a3a", skin: "#ecc6a0", shirt: "#f4f0e6", shirtDark: "#c8c2b4", pants: "#3f4a52" }, x: 118.2, z: 13.4, dir: "down" },
+  { look: { hat: "straw", hair: "#3a2414", skin: "#d8a77e", shirt: "#5a7a3a", shirtDark: "#3e5828", pants: "#4a3a2e" }, x: 64.8, z: 14.2, dir: "down" },
+  { look: { hat: "bun", hair: "#2a1a12", skin: "#f0c8a4", shirt: "#c9302a", shirtDark: "#8e2519", pants: "#3a2a20" }, x: 37.4, z: 22.4, dir: "right" },
+  // 铁匠、茶馆跑堂、码头钓鱼的。
+  { look: { hat: "none", hair: "#1e1a18", skin: "#c08a5e", shirt: "#4a4a52", shirtDark: "#2e2e36", pants: "#3a2a20", wide: true }, x: 61.2, z: 20.4, dir: "left" },
+  { look: { hat: "bun", hair: "#2a1a12", skin: "#ecc6a0", shirt: "#2f4a7a", shirtDark: "#1e3258", pants: "#2a2a30" }, x: 81.4, z: 14.4, dir: "down" },
+  { look: { hat: "straw", hair: "#5a3a22", skin: "#d8a77e", shirt: "#7a8a5a", shirtDark: "#5a6a3e", pants: "#3a3a4a" }, x: 75.5, z: 46.2, dir: "down" },
 ];
 
+/** 存档里记一笔：已经换到这一版的大地图了。 */
+const MAP_FLAG = "map:v3";
+
 /** 走、跑的速度（格/秒）。 */
-const WALK = 4.2;
-const RUN = 7;
+const WALK = 4.5;
+const RUN = 8;
 /** 套索能扔多远（格）。 */
 const THROW_RANGE = 7;
 /** 大世界里马的比例：每米多少像素。 */
@@ -99,31 +103,47 @@ interface Hit {
   act: () => void;
 }
 
-/** 一天里的环境色（乘到画面上）：清晨偏粉，傍晚偏橙，夜里深蓝。 */
-function gradeAt(clock: number): { color: string; night: number } {
-  const h = clock / 60;
-  const keys: Array<[number, string, number]> = [
-    [5, "#3a4a8a", 1],
-    [6.5, "#e8c4c8", 0.2],
-    [8.5, "#ffffff", 0],
-    [16, "#ffffff", 0],
-    [17.5, "#ffd2a0", 0.1],
-    [19, "#b07a8a", 0.5],
-    [20.5, "#4a5490", 1],
-    [24, "#3a4480", 1],
-  ];
-  const c = Math.max(keys[0]![0], Math.min(keys[keys.length - 1]![0], h));
-  for (let i = 0; i < keys.length - 1; i++) {
-    const a = keys[i]!;
-    const b = keys[i + 1]!;
-    if (c <= b[0]) {
-      const t = (c - a[0]) / (b[0] - a[0]);
-      return { color: mix(a[1], b[1], t), night: a[2] + (b[2] - a[2]) * t };
-    }
-  }
-  const last = keys[keys.length - 1]!;
-  return { color: last[1], night: last[2] };
-}
+/** 影子大小（像素半径）；0 是不要影子。 */
+const SHADOW: Partial<Record<PropKind, number>> = {
+  pine: 9,
+  oak: 10,
+  willow: 12,
+  bamboo: 7,
+  bush: 6,
+  rock: 5,
+  stump: 5,
+  statue: 15,
+  well: 12,
+  stall: 17,
+  tent: 17,
+  dish: 10,
+  barrel: 5,
+  crate: 6,
+  lamppost: 4,
+  lantern: 3,
+  planter: 9,
+  bench: 13,
+  hay: 8,
+  cart: 13,
+  trough: 14,
+  beehive: 5,
+  scarecrow: 5,
+  post: 4,
+  anvil: 6,
+  hitch: 11,
+  mailbox: 3,
+  signpost: 3,
+  board: 8,
+  woodpile: 8,
+  log: 13,
+  flag: 2,
+  sunflower: 2,
+};
+
+const SWAYS = new Set<PropKind>(["pine", "oak", "willow", "bamboo", "sunflower", "grass", "reeds"]);
+const TREES = new Set<PropKind>(["pine", "oak", "willow", "bamboo"]);
+/** 站在水边会映进水里的东西。 */
+const REFLECTS = new Set<PropKind>(["pine", "oak", "willow", "bamboo", "reeds", "bush", "rock", "lamppost", "lantern", "stump", "barrel", "signpost"]);
 
 interface Drawable {
   y: number;
@@ -159,6 +179,14 @@ export class WorldScene {
   private float: Array<{ text: string; x: number; z: number; t: number; color: string }> = [];
   private zoom = 3;
   private readonly ambient = new Ambient();
+  private readonly lighting = new Lighting();
+  readonly minimap: Minimap;
+  /** 角落里的小地图画布（界面给的）。 */
+  minimapCanvas: HTMLCanvasElement | null = null;
+  private readonly rbuf: HTMLCanvasElement;
+  private readonly rctx: CanvasRenderingContext2D;
+  /** 水边会有倒影的摆设。 */
+  private readonly reflectors: Prop[];
   private camX = 0;
   private camY = 0;
   private raf = 0;
@@ -173,7 +201,11 @@ export class WorldScene {
     if (!ctx) throw new Error("Canvas 2D 不可用");
     this.ctx = ctx;
     [this.buf, this.bctx] = canvas(320, 180);
+    [this.rbuf, this.rctx] = canvas(320, 180);
     this.ground = bakeGround();
+    bakeBuildingShadows(this.ground.getContext("2d") as CanvasRenderingContext2D, BUILDINGS);
+    this.minimap = new Minimap();
+    this.reflectors = PROPS.filter((p) => REFLECTS.has(p.kind) && nearWaterBelow(p.x, p.z));
     this.state = state;
     this.hooks = hooks;
     this.fixPlayer();
@@ -189,10 +221,14 @@ export class WorldScene {
     this.sync();
   }
 
-  /** 旧存档里的位置可能不在新地图的路上，挪回家门口。 */
+  /** 旧存档里的位置是旧地图的坐标（或者站不住），挪回家门口。 */
   private fixPlayer(): void {
-    const p = this.state.player;
-    if (!walkable(p.x, p.z)) this.state.player = { ...HOME };
+    const s = this.state;
+    if (!s.flags[MAP_FLAG]) {
+      s.flags[MAP_FLAG] = true;
+      s.player = { ...HOME };
+    }
+    if (!walkable(s.player.x, s.player.z)) s.player = { ...HOME };
   }
 
   /** 马厩里的马变了、换了一天：重建牧场里的马和野马群。 */
@@ -311,7 +347,24 @@ export class WorldScene {
     if (!this.active) return;
     if (!this.paused) this.update(dt);
     this.render();
+    if (this.minimapCanvas) this.minimap.drawLocal(this.minimapCanvas, this.mapMarks(), dt);
   };
+
+  /** 小地图要的：人在哪、马在哪。 */
+  mapMarks(): MapMarks {
+    const p = this.state.player;
+    return {
+      x: p.x,
+      z: p.z,
+      horses: [...this.paddock.map((h) => ({ x: h.x, z: h.z, wild: false })), ...this.herd.map((h) => ({ x: h.x, z: h.z, wild: true }))],
+    };
+  }
+
+  /** 人现在在哪片地方（小地图下面的名字）。 */
+  get regionName(): string {
+    const p = this.state.player;
+    return regionAt(p.x, p.z)?.name ?? "";
+  }
 
   private update(dt: number): void {
     this.time += dt;
@@ -598,13 +651,19 @@ export class WorldScene {
     const cx = this.camX;
     const cy = this.camY;
     this.hits = [];
+    const amb = ambientAt(s.clock);
+    const t = this.time;
 
     b.fillStyle = "#1d3d1f";
     b.fillRect(0, 0, bw, bh);
     b.drawImage(this.ground, cx, cy, bw, bh, 0, 0, bw, bh);
     this.drawWater(b, cx, cy, bw, bh);
+    this.drawReflections(b, cx, cy, bw, bh);
 
-    const lights: Array<[number, number, number]> = [];
+    /** 夜里的光源（缓冲坐标）；cores 是灯芯，最后再加一圈辉光。 */
+    const lights: Light[] = [];
+    const cores: Light[] = [];
+    const glows: Array<() => void> = [];
     const items: Drawable[] = [];
     const visible = (x: number, y: number, m: number): boolean => x > cx - m && x < cx + bw + m && y > cy - m && y < cy + bh + m * 2;
 
@@ -612,48 +671,105 @@ export class WorldScene {
       const sp = buildingSprite(bd);
       const ox = bd.x * TILE;
       const oy = (bd.z + bd.d) * TILE;
-      if (!visible(ox + (bd.w * TILE) / 2, oy, bd.w * TILE)) continue;
+      if (!visible(ox + (bd.w * TILE) / 2, oy, bd.w * TILE + 40)) continue;
+      const sx = ox - sp.ax - cx;
+      const sy = oy - sp.ay - cy;
+      // 人走到房子后面时，房子变半透明。
+      const behind = pz < oy && pz > oy - sp.ay + 8 && px > sx + cx && px < sx + cx + sp.img.width;
       items.push({
         y: oy,
         draw: () => {
-          b.drawImage(sp.img, ox - sp.ax - cx, oy - sp.ay - cy);
-          drawChimney(b, bd, cx, cy);
+          if (behind) b.globalAlpha = 0.55;
+          b.drawImage(sp.img, sx, sy);
+          if (sp.hub) drawBlades(b, ox + sp.hub[0] - cx, oy + sp.hub[1] - cy, t);
+          b.globalAlpha = 1;
         },
       });
-      for (const [lx, ly] of sp.lights) lights.push([ox + lx - cx, oy + ly - cy, 22]);
+      if (sp.glow) {
+        const glow = sp.glow;
+        glows.push(() => {
+          b.globalAlpha = Math.min(1, amb.night * 1.3) * (behind ? 0.55 : 1);
+          b.drawImage(glow, sx, sy);
+        });
+      }
+      for (const l of sp.lights) {
+        const lx = ox + l.x - cx;
+        const ly = oy + l.y - cy;
+        let power = l.kind === "spill" ? 0.75 : 1;
+        if (l.kind === "flicker") power = 0.8 + Math.sin(t * 11 + lx) * 0.1 + Math.sin(t * 27 + ly) * 0.08;
+        if (l.kind === "beacon") {
+          const on = (t * 0.7) % 1 < 0.35;
+          if (on) {
+            cores.push({ x: lx, y: ly, r: l.r, color: l.color, power: 1 });
+            glows.push(() => {
+              b.globalAlpha = 1;
+              b.fillStyle = "#ff6a50";
+              b.fillRect(Math.round(lx) - 1, Math.round(ly) - 1, 3, 2);
+            });
+          }
+          continue;
+        }
+        lights.push({ x: lx, y: ly, r: l.r, color: l.color, power });
+        if (l.kind !== "spill") cores.push({ x: lx, y: ly, r: Math.round(l.r * 0.7), color: l.color, power: power * 0.8 });
+      }
     }
     for (const p of PROPS) {
       const x = p.x * TILE;
       const y = p.z * TILE;
-      if (!visible(x, y, 40)) continue;
+      if (!visible(x, y, p.kind === "fountain" ? 70 : 44)) continue;
       const sp = propSprite(p);
-      const tree = p.kind === "pine" || p.kind === "oak";
-      const sways = tree || p.kind === "sunflower" || p.kind === "grass" || p.kind === "reeds";
+      const tree = TREES.has(p.kind);
+      const sways = SWAYS.has(p.kind);
+      const sr = SHADOW[p.kind] ?? 0;
       items.push({
         y,
         draw: () => {
-          if (tree || p.kind === "bush" || p.kind === "rock") shadow(b, x - cx, y - cy, tree ? 9 : 5);
+          if (sr) shadow(b, x - cx, y - cy, sr);
           // 人走到树后面时，树变半透明。
           if (tree && pz < y && pz > y - sp.img.height + 6 && Math.abs(px - x) < sp.img.width / 2) b.globalAlpha = 0.5;
           const sx = Math.round(x - sp.ax - cx);
-          const sy = Math.round(y - sp.ay - cy);
-          if (p.kind === "flag") drawFlag(b, sp.img, sx, sy, this.time + p.v);
+          let sy = Math.round(y - sp.ay - cy);
+          if (p.kind === "boat") sy += Math.round(Math.sin(t * 1.6 + p.x) * 0.8);
+          if (p.kind === "flag") drawFlag(b, sp.img, sx, sy, t + p.v);
           else if (sways) {
             // 风吹过来，树冠和草尖左右晃一个像素；人从草边走过时晃得多。
             const brush = !tree && Math.hypot(px - x, pz - y) < 10 && this.moving ? 2 : 1;
-            const dx = Math.round(Math.sin(this.time * (tree ? 1.3 : 2.2) + p.x * 0.7 + p.z * 0.3) * 0.9 * brush);
-            drawSway(b, sp.img, sx, sy, dx, tree ? 0.62 : 0.5);
+            const dx = Math.round(Math.sin(t * (tree ? 1.3 : 2.2) + p.x * 0.7 + p.z * 0.3) * 0.9 * brush);
+            drawSway(b, sp.img, sx, sy, dx, p.kind === "willow" ? 0.3 : tree ? 0.62 : 0.5);
           } else b.drawImage(sp.img, sx, sy);
+          if (p.kind === "fountain") drawFountainWater(b, sx, sy, t);
+          if (p.kind === "campfire") drawFlames(b, Math.round(x - cx), Math.round(y - cy) - 4, t);
           b.globalAlpha = 1;
         },
       });
-      if (p.kind === "lantern") lights.push([x + 2 - cx, y - 17 - cy, 30]);
+      const lx = x - cx;
+      const ly = y - cy;
+      if (p.kind === "lantern") {
+        const flick = 0.9 + Math.sin(t * 9 + x) * 0.06 + Math.sin(t * 23 + y) * 0.04;
+        lights.push({ x: lx + 2, y: ly - 17, r: 34, color: "#ff9a5a", power: flick });
+        cores.push({ x: lx + 2, y: ly - 17, r: 16, color: "#ff8a4a", power: flick });
+      } else if (p.kind === "lamppost") {
+        const c = p.v ? "#d8ecff" : "#ffd27a";
+        lights.push({ x: lx, y: ly - 26, r: 48, color: c, power: p.v ? 0.7 : 0.95 });
+        cores.push({ x: lx, y: ly - 32, r: 14, color: c, power: 1 });
+        glows.push(() => {
+          b.globalAlpha = Math.min(1, amb.night * 1.4);
+          b.fillStyle = p.v ? "#f4faff" : "#fff0b0";
+          b.fillRect(Math.round(lx) - 3, Math.round(ly) - 35, 6, 5);
+        });
+      } else if (p.kind === "campfire") {
+        const flick = 0.85 + Math.sin(t * 13 + x) * 0.1 + Math.sin(t * 31) * 0.05;
+        lights.push({ x: lx, y: ly - 6, r: 64, color: "#ff8a3a", power: flick });
+        cores.push({ x: lx, y: ly - 8, r: 20, color: "#ffb04a", power: flick });
+      } else if (p.kind === "fountain") {
+        lights.push({ x: lx, y: ly - 26, r: 56, color: "#8ad0ff", power: 0.45 });
+      }
     }
     for (const f of FENCES) {
       const x = f.x * TILE;
       const y = f.z * TILE;
       if (!visible(x, y, 20)) continue;
-      items.push({ y: f.horizontal ? y + 1 : y + TILE, draw: () => drawFence(b, x - cx, y - cy, f.horizontal) });
+      items.push({ y: f.horizontal ? y + 1 : y + TILE, draw: () => drawFence(b, x - cx, y - cy, f) });
     }
 
     // 人物和马。
@@ -665,7 +781,7 @@ export class WorldScene {
         y,
         draw: () => {
           shadow(b, x - cx, y - cy, 5);
-          const f = personFrame(n.look, n.dir, Math.floor(this.time * 1.5 + n.x) % 2 ? 0 : 2);
+          const f = personFrame(n.look, n.dir, Math.floor(t * 1.5 + n.x) % 2 ? 0 : 2);
           b.drawImage(f, Math.round(x - 9 - cx), Math.round(y - 26 - cy));
         },
       });
@@ -677,31 +793,13 @@ export class WorldScene {
       items.push({
         y,
         draw: () => {
-          shadow(b, x - cx, y - cy, Math.round(10 * h.scale));
+          shadow(b, x - cx, y - cy, Math.round(11 * h.scale));
           const r = h.drawPixel(b, x - cx, y - cy, HORSE_PPM);
           if (onClick) this.hits.push({ ...r, act: onClick });
           // 马头顶的高度：按体型估，不用缓冲画布的上沿（那里留了空白）。
           const top = Math.round(y - cy - 2.5 * HORSE_PPM * h.scale);
           if (tag && Math.hypot(h.x - s.player.x, h.z - s.player.z) < 5) nameTag(b, x - cx, top - 2, tag);
-          if (mark) {
-            // 可以套的马头上一个上下跳的黄色箭头。
-            const bob = Math.round(Math.sin(this.time * 6) * 1.5);
-            const ax = Math.round(x - cx);
-            const ay = top - 10 + bob;
-            b.fillStyle = "#2a1a12";
-            b.fillRect(ax - 5, ay - 1, 11, 4);
-            b.fillRect(ax - 4, ay + 3, 9, 2);
-            b.fillRect(ax - 3, ay + 5, 7, 2);
-            b.fillRect(ax - 2, ay + 7, 5, 2);
-            b.fillRect(ax - 1, ay + 9, 3, 1);
-            b.fillStyle = "#f6d05a";
-            b.fillRect(ax - 4, ay, 9, 3);
-            b.fillRect(ax - 3, ay + 3, 7, 2);
-            b.fillRect(ax - 2, ay + 5, 5, 2);
-            b.fillRect(ax - 1, ay + 7, 3, 2);
-            b.fillStyle = "#fff2b0";
-            b.fillRect(ax - 3, ay, 3, 1);
-          }
+          if (mark) drawArrow(b, Math.round(x - cx), top - 10 + Math.round(Math.sin(t * 6) * 1.5));
         },
       });
     };
@@ -729,31 +827,16 @@ export class WorldScene {
     for (const it of items) it.draw();
     this.ambient.drawAbove(b, view);
 
-    // 昼夜：整体乘一层颜色，夜里点灯。
-    const grade = gradeAt(s.clock);
-    if (grade.color !== "#ffffff") {
-      b.globalCompositeOperation = "multiply";
-      b.fillStyle = grade.color;
-      b.fillRect(0, 0, bw, bh);
-      b.globalCompositeOperation = "source-over";
+    // 白天云影飘过；之后整张乘上光照贴图，夜里点灯、窗户发光，再加一圈辉光。
+    this.lighting.drawClouds(b, cx, cy, bw, bh, t, amb);
+    if (amb.night > 0.05) lights.push({ x: px - cx, y: pz - cy - 8, r: 44, color: "#ffe0b0", power: 0.4 });
+    if (this.lighting.apply(b, bw, bh, lights, amb) && amb.night > 0.05) {
+      for (const g of glows) g();
+      b.globalAlpha = 1;
+      this.lighting.bloom(b, cores, amb);
     }
-    if (grade.night > 0.2) {
-      b.globalCompositeOperation = "lighter";
-      for (const [x, y, r0] of lights) {
-        // 灯笼的火苗一闪一闪。
-        const r = r0 === 30 ? r0 + Math.round(Math.sin(this.time * 9 + x) * 1.5 + Math.sin(this.time * 23 + y)) : r0;
-        if (x < -r || y < -r || x > bw + r || y > bh + r) continue;
-        const g = b.createRadialGradient(x, y, 0, x, y, r);
-        g.addColorStop(0, `rgba(255,180,90,${0.55 * grade.night})`);
-        g.addColorStop(1, "rgba(255,150,60,0)");
-        b.fillStyle = g;
-        b.fillRect(x - r, y - r, r * 2, r * 2);
-      }
-      b.globalCompositeOperation = "source-over";
-      b.fillStyle = `rgba(255,214,120,${Math.min(1, grade.night)})`;
-      for (const [x, y, r] of lights) if (r === 22) b.fillRect(Math.round(x - 3), Math.round(y - 3), 6, 6);
-    }
-    this.ambient.drawNight(b, view, grade.night);
+    this.lighting.drawRays(b, cx, bw, bh, t, amb);
+    this.ambient.drawNight(b, view, amb.night);
 
     this.drawOverlay(b, cx, cy, bw, bh);
 
@@ -761,6 +844,87 @@ export class WorldScene {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(this.buf, 0, 0, bw, bh, 0, 0, bw * this.zoom * dpr, bh * this.zoom * dpr);
+  }
+
+  /**
+   * 水里的倒影：水边的树、灯、人倒过来画进一张缓冲，染上水色，
+   * 只留水面那部分，再一行行错开一两个像素贴上去（波纹）。
+   */
+  private drawReflections(b: CanvasRenderingContext2D, cx: number, cy: number, bw: number, bh: number): void {
+    const x0 = Math.floor(cx / TILE);
+    const z0 = Math.floor(cy / TILE);
+    const x1 = Math.ceil((cx + bw) / TILE);
+    const z1 = Math.ceil((cy + bh) / TILE);
+    const water: Array<[number, number, number, number]> = [];
+    const wet = (x: number, z: number): boolean => {
+      const k = tileAt(x, z);
+      return k === T.water || k === T.bridge;
+    };
+    for (let z = z0; z <= z1; z++)
+      for (let x = x0; x <= x1; x++) {
+        if (tileAt(x, z) !== T.water) continue;
+        const l = wet(x - 1, z) ? 0 : 3;
+        const r = wet(x + 1, z) ? 0 : 3;
+        const top = wet(x, z - 1) ? 0 : 4;
+        const bot = wet(x, z + 1) ? 0 : 3;
+        water.push([x * TILE - cx + l, z * TILE - cy + top, TILE - l - r, TILE - top - bot]);
+      }
+    if (!water.length) return;
+    const r = this.rctx;
+    if (this.rbuf.width !== bw || this.rbuf.height !== bh) {
+      this.rbuf.width = bw;
+      this.rbuf.height = bh;
+    }
+    r.setTransform(1, 0, 0, 1, 0, 0);
+    r.globalCompositeOperation = "source-over";
+    r.clearRect(0, 0, bw, bh);
+    r.imageSmoothingEnabled = false;
+    const mirror = (img: HTMLCanvasElement, x: number, footY: number, top: number): void => {
+      r.setTransform(1, 0, 0, -1, 0, Math.round(footY) * 2);
+      r.drawImage(img, Math.round(x), Math.round(top));
+    };
+    for (const p of this.reflectors) {
+      const x = p.x * TILE - cx;
+      const y = p.z * TILE - cy;
+      if (x < -60 || x > bw + 60 || y < -80 || y > bh + 10) continue;
+      const sp = propSprite(p);
+      mirror(sp.img, x - sp.ax, y, y - sp.ay);
+    }
+    const s = this.state;
+    const people: Array<{ look: PersonLook; x: number; z: number; dir: Dir; frame: number }> = [
+      ...NPCS.map((n) => ({ look: n.look, x: n.x, z: n.z, dir: n.dir, frame: 0 })),
+      ...this.ambient.people(),
+      { look: PLAYER_LOOK, x: s.player.x, z: s.player.z, dir: this.dir, frame: this.moving ? Math.floor(this.walkPhase) % 4 : 0 },
+    ];
+    for (const m of people) {
+      if (!nearWaterBelow(m.x, m.z)) continue;
+      const x = m.x * TILE - cx;
+      const y = m.z * TILE - cy;
+      if (x < -20 || x > bw + 20 || y < -40 || y > bh + 10) continue;
+      mirror(personFrame(m.look, m.dir, m.frame), x - 9, y, y - 26);
+    }
+    r.setTransform(1, 0, 0, 1, 0, 0);
+    r.globalCompositeOperation = "source-atop";
+    r.fillStyle = "rgba(36,90,150,0.5)";
+    r.fillRect(0, 0, bw, bh);
+    r.globalCompositeOperation = "destination-in";
+    r.fillStyle = "#ffffff";
+    r.beginPath();
+    let minY = bh;
+    let maxY = 0;
+    for (const [x, y, w, h] of water) {
+      r.rect(x, y, w, h);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y + h);
+    }
+    r.fill();
+    r.globalCompositeOperation = "source-over";
+    b.globalAlpha = 0.55;
+    for (let y = Math.max(0, minY); y < Math.min(bh, maxY); y++) {
+      const off = Math.round(Math.sin(y * 0.5 + this.time * 2.4) * 1.1);
+      b.drawImage(this.rbuf, 0, y, bw, 1, off, y, bw, 1);
+    }
+    b.globalAlpha = 1;
   }
 
   private drawWater(b: CanvasRenderingContext2D, cx: number, cy: number, bw: number, bh: number): void {
@@ -776,7 +940,7 @@ export class WorldScene {
         const phase = (this.time * 0.8 + (hsh % 100) / 100) % 2;
         if (phase > 1) continue;
         const sx = x * TILE + (hsh % 10) + Math.round(phase * 3) - cx;
-        const sy = z * TILE + ((hsh >> 4) % 12) + 2 - cy;
+        const sy = z * TILE + ((hsh >>> 4) % 12) + 2 - cy;
         b.fillRect(sx, sy, 3 + Math.round(phase * 2), 1);
       }
   }
@@ -851,15 +1015,51 @@ function steer(h: HorsePuppet, tx: number, tz: number, speed: number): void {
   h.vz += (vz - h.vz) * 0.08;
 }
 
-function shadow(b: CanvasRenderingContext2D, x: number, y: number, r: number): void {
-  b.fillStyle = "rgba(20,30,10,0.28)";
-  const rx = Math.round(x);
-  const ry = Math.round(y);
-  b.fillRect(rx - r + 1, ry - 2, r * 2 - 2, 4);
-  b.fillRect(rx - r, ry - 1, r * 2, 2);
+/** 这一点往下几格之内有水（倒影用）。 */
+function nearWaterBelow(x: number, z: number): boolean {
+  for (let k = 0.6; k <= 3.6; k += 1) if (tileAt(x, z + k) === T.water) return true;
+  return false;
 }
 
-function drawFence(b: CanvasRenderingContext2D, x: number, y: number, horizontal: boolean): void {
+/** 脚下的影子：一个像素椭圆，往右偏一点（光从左上来）。 */
+function shadow(b: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+  b.fillStyle = "rgba(20,34,16,0.3)";
+  const rx = Math.round(x) + 1;
+  const ry = Math.round(y);
+  const h = Math.max(1, Math.round(r * 0.36));
+  for (let dy = -h; dy <= h; dy++) {
+    const w = Math.round(r * Math.sqrt(Math.max(0, 1 - (dy / (h + 0.6)) ** 2)));
+    if (w > 0) b.fillRect(rx - w, ry + dy, w * 2, 1);
+  }
+}
+
+function drawFence(b: CanvasRenderingContext2D, x: number, y: number, f: Fence): void {
+  if (f.metal) {
+    // 研究所的白铁栅栏：细杆、尖头、两道横杆。
+    const bar = (bx: number, by: number, h: number): void => {
+      b.fillStyle = "#3a3e46";
+      b.fillRect(bx - 1, by - h - 1, 3, h + 1);
+      b.fillStyle = "#e8eaf0";
+      b.fillRect(bx, by - h, 1, h);
+      b.fillRect(bx, by - h - 2, 1, 1);
+    };
+    if (f.horizontal) {
+      b.fillStyle = "#3a3e46";
+      b.fillRect(x, y - 13, TILE + 1, 3);
+      b.fillRect(x, y - 6, TILE + 1, 3);
+      b.fillStyle = "#e8eaf0";
+      b.fillRect(x, y - 12, TILE + 1, 1);
+      b.fillRect(x, y - 5, TILE + 1, 1);
+      for (let i = 0; i < TILE; i += 4) bar(x + i, y, 14);
+    } else {
+      b.fillStyle = "#3a3e46";
+      b.fillRect(x - 1, y - 12, 3, TILE + 2);
+      b.fillStyle = "#e8eaf0";
+      b.fillRect(x, y - 12, 1, TILE + 1);
+      bar(x, y + TILE, 14);
+    }
+    return;
+  }
   const post = (px: number, py: number): void => {
     b.fillStyle = "#3a2414";
     b.fillRect(px - 1, py - 13, 5, 14);
@@ -867,22 +1067,151 @@ function drawFence(b: CanvasRenderingContext2D, x: number, y: number, horizontal
     b.fillRect(px, py - 12, 3, 12);
     b.fillStyle = "#c99a5e";
     b.fillRect(px, py - 12, 1, 12);
+    b.fillStyle = "#d8b07a";
+    b.fillRect(px, py - 12, 3, 1);
   };
-  if (horizontal) {
+  if (f.horizontal) {
+    b.fillStyle = "rgba(20,34,16,0.25)";
+    b.fillRect(x + 1, y + 1, TILE, 2);
     b.fillStyle = "#3a2414";
     b.fillRect(x, y - 11, TILE + 1, 4);
     b.fillRect(x, y - 6, TILE + 1, 4);
     b.fillStyle = "#b07a46";
     b.fillRect(x, y - 10, TILE + 1, 2);
     b.fillRect(x, y - 5, TILE + 1, 2);
+    b.fillStyle = "#d0a06a";
+    b.fillRect(x, y - 10, TILE + 1, 1);
+    b.fillRect(x, y - 5, TILE + 1, 1);
     post(x - 1, y);
   } else {
     b.fillStyle = "#3a2414";
     b.fillRect(x - 1, y - 10, 5, TILE + 2);
     b.fillStyle = "#a8733f";
     b.fillRect(x, y - 10, 3, TILE + 1);
+    b.fillStyle = "#d0a06a";
+    b.fillRect(x, y - 10, 1, TILE + 1);
     post(x, y + TILE);
   }
+}
+
+/** 风车的四片叶子，绕着轮毂慢慢转。 */
+function drawBlades(b: CanvasRenderingContext2D, hx: number, hy: number, t: number): void {
+  const a0 = t * 0.9;
+  for (let i = 0; i < 4; i++) {
+    const a = a0 + (i * Math.PI) / 2;
+    const ca = Math.cos(a);
+    const sa = Math.sin(a);
+    for (let k = 3; k < 30; k++) {
+      const x = Math.round(hx + ca * k);
+      const y = Math.round(hy + sa * k * 0.92);
+      b.fillStyle = "#3a2414";
+      b.fillRect(x - 1, y - 1, 2, 2);
+      // 帆布：在杆子一侧铺一条格子。
+      if (k > 8) {
+        for (let w = 1; w < 7; w++) {
+          const sx = Math.round(x - sa * w);
+          const sy = Math.round(y + ca * w * 0.92);
+          b.fillStyle = (k + w) % 4 === 0 ? "#8a6a42" : w === 6 ? "#b8a37a" : "#f0e6cc";
+          b.fillRect(sx, sy, 1, 1);
+        }
+      }
+    }
+  }
+  b.fillStyle = "#3a2414";
+  b.fillRect(Math.round(hx) - 2, Math.round(hy) - 2, 5, 5);
+  b.fillStyle = "#a8733f";
+  b.fillRect(Math.round(hx) - 1, Math.round(hy) - 1, 3, 3);
+}
+
+/** 喷泉的水：顶上一股水柱，两层水盘往下淌，池子里一圈圈波纹和闪光。坐标按喷泉贴图。 */
+function drawFountainWater(b: CanvasRenderingContext2D, sx: number, sy: number, t: number): void {
+  const cx = sx + 50;
+  const dot = (x: number, y: number, c: string): void => {
+    b.fillStyle = c;
+    b.fillRect(Math.round(x), Math.round(y), 1, 1);
+  };
+  // 水柱
+  b.fillStyle = "#bfe6ff";
+  b.fillRect(cx - 1, sy + 2, 2, 9);
+  dot(cx - 1, sy + 2 + ((t * 18) % 8), "#ffffff");
+  for (let i = 0; i < 6; i++) {
+    const ph = (t * 1.4 + i / 6) % 1;
+    const side = i % 2 ? 1 : -1;
+    dot(cx + side * (1 + ph * 6), sy + 2 + ph * 14 - Math.sin(ph * Math.PI) * 4, ph < 0.5 ? "#ffffff" : "#9fd8ff");
+  }
+  // 小水盘往大水盘淌：一圈竖着的水帘，水珠往下走。
+  for (let a = 0; a <= 12; a++) {
+    const th = (a / 12) * Math.PI;
+    const x = cx + Math.cos(th) * 7;
+    const y0 = sy + 19 + Math.sin(th) * 2.6;
+    for (let y = y0; y < sy + 31 + Math.sin(th) * 4; y++) if ((Math.floor(y - t * 22) + a * 2) % 4 < 2) dot(x, y, (a + Math.floor(y)) % 3 ? "#9fd8ff" : "#e8f6ff");
+  }
+  // 大水盘往池子淌。
+  for (let a = 0; a <= 20; a++) {
+    const th = (a / 20) * Math.PI;
+    const x = cx + Math.cos(th) * 17;
+    const y0 = sy + 37 + Math.sin(th) * 5.5;
+    for (let y = y0; y < y0 + 12 + Math.sin(th) * 4; y++) if ((Math.floor(y - t * 26) + a * 3) % 5 < 2) dot(x, y, (a + Math.floor(y)) % 3 ? "#8ac8f0" : "#e8f6ff");
+  }
+  // 池子里的波纹
+  for (let i = 0; i < 3; i++) {
+    const ph = (t * 0.45 + i / 3) % 1;
+    const rx = 19 + ph * 19;
+    const ry = rx * 0.33;
+    b.globalAlpha = 1 - ph;
+    for (let k = 0; k < 40; k++) {
+      const th = (k / 40) * Math.PI * 2;
+      if ((k + i) % 3 === 0) continue;
+      dot(cx + Math.cos(th) * rx, sy + 58 + Math.sin(th) * ry, "#a8dcff");
+    }
+    b.globalAlpha = 1;
+  }
+  // 水面的闪光
+  for (let i = 0; i < 7; i++) {
+    const h = hashSeed(`f${i}:${Math.floor(t * 2 + i * 0.37)}`);
+    const th = ((h % 628) / 100) * 1;
+    const rr = 0.4 + ((h >>> 10) % 60) / 100;
+    dot(cx + Math.cos(th) * 36 * rr, sy + 58 + Math.sin(th) * 11 * rr, "#ffffff");
+  }
+}
+
+/** 篝火的火苗：三层颜色，一跳一跳，往上飘火星。 */
+function drawFlames(b: CanvasRenderingContext2D, x: number, y: number, t: number): void {
+  const layers: Array<[string, number, number]> = [
+    ["#d8402a", 5, 11],
+    ["#f28a2a", 4, 8],
+    ["#ffd25a", 2, 5],
+  ];
+  for (const [c, w, h] of layers) {
+    b.fillStyle = c;
+    for (let dx = -w; dx <= w; dx++) {
+      const k = 1 - Math.abs(dx) / (w + 1);
+      const hh = Math.round(h * k * (0.75 + 0.25 * Math.sin(t * 14 + dx * 1.7 + w)));
+      b.fillRect(x + dx, y - hh, 1, hh);
+    }
+  }
+  for (let i = 0; i < 4; i++) {
+    const ph = (t * 0.9 + i * 0.27) % 1;
+    b.fillStyle = ph < 0.5 ? "#ffd25a" : "#f28a2a";
+    b.fillRect(Math.round(x + Math.sin(t * 3 + i * 2) * 3), Math.round(y - 10 - ph * 18), 1, 1);
+  }
+}
+
+/** 可以套的马头上一个上下跳的黄色箭头。 */
+function drawArrow(b: CanvasRenderingContext2D, ax: number, ay: number): void {
+  b.fillStyle = "#2a1a12";
+  b.fillRect(ax - 5, ay - 1, 11, 4);
+  b.fillRect(ax - 4, ay + 3, 9, 2);
+  b.fillRect(ax - 3, ay + 5, 7, 2);
+  b.fillRect(ax - 2, ay + 7, 5, 2);
+  b.fillRect(ax - 1, ay + 9, 3, 1);
+  b.fillStyle = "#f6d05a";
+  b.fillRect(ax - 4, ay, 9, 3);
+  b.fillRect(ax - 3, ay + 3, 7, 2);
+  b.fillRect(ax - 2, ay + 5, 5, 2);
+  b.fillRect(ax - 1, ay + 7, 3, 2);
+  b.fillStyle = "#fff2b0";
+  b.fillRect(ax - 3, ay, 3, 1);
 }
 
 /** 上半截（树冠、草尖）错开 dx 个像素，下半截不动。 */

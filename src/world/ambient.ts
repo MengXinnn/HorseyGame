@@ -2,8 +2,9 @@
  * 大世界里的小动静：鸡、鸭、蝴蝶、飞鸟、萤火虫、炊烟、落叶、跑步扬起的土、镇上走来走去的人。
  * 都不影响玩法，只让世界活起来。
  */
-import { BUILDINGS, POND, T, TILE, tileAt } from "./tiles";
-import { canvas, outline, personFrame, roofTop, type Dir, type PersonLook } from "./sprites";
+import { buildingSprite } from "./buildingArt";
+import { BUILDINGS, CHICKEN_PEN, POND, T, TILE, tileAt, type Building } from "./tiles";
+import { canvas, outline, personFrame, type Dir, type PersonLook } from "./sprites";
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -147,6 +148,8 @@ interface Puff {
   y: number;
   t: number;
   size: number;
+  /** 铁匠铺的烟是黑的。 */
+  dark: boolean;
 }
 
 interface Particle {
@@ -159,42 +162,64 @@ interface Particle {
   color: string;
 }
 
-const CHICKEN_PEN = { x0: 20.5, z0: 52.2, x1: 29.5, z1: 55 };
-
 const WALKERS: Array<{ look: PersonLook; path: Array<[number, number]> }> = [
   {
+    // 广场上绕着喷泉转圈的人。
     look: { hat: "none", hair: "#5a3a22", skin: "#f0c8a4", shirt: "#d07a2a", shirtDark: "#9a5418", pants: "#3a3a4a" },
     path: [
-      [44, 15],
-      [56, 15],
-      [56, 24],
-      [70, 24],
-      [70, 15],
-      [56, 15],
+      [68, 18.8],
+      [82, 18.8],
+      [82, 31.8],
+      [68, 31.8],
     ],
   },
   {
+    // 东西大街上来回走的货郎。
     look: { hat: "bun", hair: "#1e1a18", skin: "#ecc6a0", shirt: "#5a8ac8", shirtDark: "#3a62a0", pants: "#2a2a30" },
     path: [
-      [72, 26],
-      [72, 14],
-      [48, 14],
-      [48, 26],
+      [47, 25.6],
+      [100, 25.6],
+      [118.5, 25.6],
+      [118.5, 30.5],
+      [118.5, 25.6],
+      [101.5, 25.6],
+      [101.5, 42],
+      [101.5, 25.6],
     ],
   },
   {
+    // 牧场大路上走的农夫。
     look: { hat: "straw", hair: "#3a2414", skin: "#d8a77e", shirt: "#8a6a9a", shirtDark: "#644a72", pants: "#4a3a2e" },
     path: [
-      [32, 30],
-      [32, 48],
-      [32, 30],
-      [38, 26],
+      [43.5, 28],
+      [43.5, 70],
+      [22, 70],
+      [43.5, 70],
+    ],
+  },
+  {
+    // 研究所院子里踱步的研究员。
+    look: { hat: "none", hair: "#3a3a3a", skin: "#ecc6a0", shirt: "#f4f0e6", shirtDark: "#c8c2b4", pants: "#3f4a52" },
+    path: [
+      [121.5, 14.6],
+      [121.5, 19.6],
+      [113, 19.6],
+      [113, 14.6],
+    ],
+  },
+  {
+    // 看台前溜达的看客。
+    look: { hat: "cap", hair: "#2a1a12", skin: "#e2b893", shirt: "#4fa64a", shirtDark: "#357a30", pants: "#2a2a30" },
+    path: [
+      [6, 12.6],
+      [44, 12.6],
     ],
   },
 ];
 
-/** 冒炊烟的房子：家、老赵家、马市。 */
-const CHIMNEYS = BUILDINGS.filter((b) => b.kind === "home" || b.kind === "zhao" || b.kind === "market");
+/** 冒炊烟的房子：贴图上有烟囱的那几栋。 */
+let chimneys: Building[] | null = null;
+const chimneyHouses = (): Building[] => (chimneys ??= BUILDINGS.filter((b) => buildingSprite(b).chimney));
 
 const BUTTERFLY_COLORS = ["#f6f0ff", "#f6d84a", "#f19ab0", "#9ac8f6"];
 
@@ -318,9 +343,10 @@ export class Ambient {
     if (this.puffTimer <= 0) {
       const cooking = (clock > 6 * 60 && clock < 9 * 60) || (clock > 17 * 60 && clock < 21 * 60);
       this.puffTimer = cooking ? 0.35 : 0.9;
-      for (const b of CHIMNEYS) {
+      for (const b of chimneyHouses()) {
         const [x, y] = chimneyAt(b);
-        this.puffs.push({ x: x + Math.random() * 2 - 1, y, t: 0, size: 2 });
+        const dark = b.kind === "smithy";
+        this.puffs.push({ x: x + Math.random() * 2 - 1, y, t: 0, size: dark ? 3 : 2, dark });
       }
     }
     for (const p of this.puffs) {
@@ -357,6 +383,11 @@ export class Ambient {
     }
     for (const rp of this.ripples) rp.t += dt;
     this.ripples = this.ripples.filter((rp) => rp.t < 1.4);
+  }
+
+  /** 镜头附近的行人（倒影要用）。 */
+  people(): Array<{ look: PersonLook; x: number; z: number; dir: Dir; frame: number }> {
+    return this.walkers.map((w) => ({ look: w.look, x: w.x, z: w.z, dir: w.dir, frame: w.wait > 0 ? 0 : Math.floor(w.phase) % 4 }));
   }
 
   /** 和人、树一起按 y 排序的东西：鸡、鸭、行人。 */
@@ -425,9 +456,9 @@ export class Ambient {
     for (const p of this.puffs) {
       const a = Math.max(0, 0.75 * (1 - p.t / 2.6));
       const s = Math.round(p.size);
-      b.fillStyle = `rgba(220,220,226,${a})`;
+      b.fillStyle = p.dark ? `rgba(90,86,90,${a})` : `rgba(220,220,226,${a})`;
       b.fillRect(Math.round(p.x - cx - s / 2), Math.round(p.y - cy - s / 2), s, s);
-      b.fillStyle = `rgba(160,160,170,${a * 0.6})`;
+      b.fillStyle = p.dark ? `rgba(50,46,50,${a * 0.6})` : `rgba(160,160,170,${a * 0.6})`;
       b.fillRect(Math.round(p.x - cx - s / 2), Math.round(p.y - cy + s / 2 - 1), s, 1);
     }
     for (const f of this.flies) {
@@ -466,24 +497,10 @@ export class Ambient {
   }
 }
 
-/** 烟囱口在屋顶右侧（缓冲坐标）。 */
-function chimneyAt(b: (typeof BUILDINGS)[number]): [number, number] {
-  return [(b.x + b.w * 0.74) * TILE, roofTop(b) + 6];
-}
-
-export function drawChimney(b: Ctx, bd: (typeof BUILDINGS)[number], cx: number, cy: number): void {
-  if (!CHIMNEYS.includes(bd)) return;
-  const [x, y] = chimneyAt(bd);
-  const sx = Math.round(x - cx - 3);
-  const sy = Math.round(y - cy) + 2;
-  b.fillStyle = "#2a1a12";
-  b.fillRect(sx - 1, sy - 1, 8, 12);
-  b.fillStyle = "#8a4a3a";
-  b.fillRect(sx, sy, 6, 11);
-  b.fillStyle = "#a85a44";
-  b.fillRect(sx, sy, 6, 2);
-  b.fillStyle = "#6a3428";
-  b.fillRect(sx, sy + 5, 6, 1);
+/** 烟囱口（缓冲坐标）。 */
+function chimneyAt(b: Building): [number, number] {
+  const c = buildingSprite(b).chimney ?? [0, 0];
+  return [b.x * TILE + c[0], (b.z + b.d) * TILE + c[1]];
 }
 
 function drawFlipped(b: Ctx, img: HTMLCanvasElement, x: number, y: number, facing: 1 | -1): void {

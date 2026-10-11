@@ -476,6 +476,84 @@ canvas,
   }
 }
 
+/* ---------------- HUD：左上角小地图 ---------------- */
+
+.minimap {
+  position: absolute;
+  top: calc(var(--u) * 3);
+  left: calc(var(--u) * 3);
+  display: block;
+  border: solid transparent;
+  border-width: calc(var(--u) * 6);
+  border-image: var(--f-menu) 8 fill / calc(var(--u) * 6) / 0 stretch;
+  image-rendering: pixelated;
+}
+
+.minimap canvas {
+  display: block;
+  width: calc(var(--u) * 80);
+  height: calc(var(--u) * 56);
+  box-shadow: 0 0 0 var(--u) var(--ink);
+}
+
+.mm-name {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--u) * -15);
+  transform: translateX(-50%);
+  padding: 0 calc(var(--u) * 4);
+  font-size: var(--fs-s);
+  line-height: calc(var(--u) * 6);
+  white-space: nowrap;
+  color: var(--cream);
+  text-shadow: 0 var(--u) 0 var(--ink);
+  border: solid transparent;
+  border-width: calc(var(--u) * 2);
+  border-image: var(--f-plank) 4 fill / calc(var(--u) * 3) / 0 stretch;
+  image-rendering: pixelated;
+}
+
+/* ---------------- 大地图 ---------------- */
+
+.menu-frame.map {
+  width: auto;
+  max-width: 96vw;
+}
+
+.worldmap {
+  position: relative;
+  line-height: 1;
+}
+
+.worldmap canvas {
+  display: block;
+  box-shadow: 0 0 0 var(--u) var(--ink);
+}
+
+.wm-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: var(--fs-s);
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  color: var(--cream);
+  text-shadow: 1px 0 0 var(--ink), -1px 0 0 var(--ink), 0 1px 0 var(--ink), 0 -1px 0 var(--ink), 1px 1px 0 var(--ink);
+}
+
+.worldmap.small .wm-label:not(.big) {
+  display: none;
+}
+
+.wm-label.big {
+  padding: var(--u) calc(var(--u) * 3);
+  border: solid transparent;
+  border-width: calc(var(--u) * 2);
+  border-image: var(--f-plank) 4 fill / calc(var(--u) * 3) / 0 stretch;
+  image-rendering: pixelated;
+  text-shadow: 0 1px 0 var(--ink);
+}
+
 /* ---------------- HUD：底部工具栏 ---------------- */
 
 .toolbar {

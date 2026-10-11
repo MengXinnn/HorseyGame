@@ -46,7 +46,8 @@ import {
   type NightReport,
   type StableHorse,
 } from "../game/state";
-import { INTERACTS, type InteractId } from "../world/tiles";
+import { BUILDINGS, INTERACTS, MAP_H, MAP_W, RING, type InteractId } from "../world/tiles";
+import { MAP_PX } from "../world/minimap";
 import { WorldScene } from "../world/world";
 import { drawPortrait } from "./portrait";
 import { drawDial, ico, installPixelUI } from "./pixelui";
@@ -116,6 +117,10 @@ export function startApp(root: HTMLElement): void {
       <canvas id="race" class="view" hidden aria-label="赛场"></canvas>
       <canvas id="sumo" class="view" hidden aria-label="相扑台"></canvas>
       <div class="hud" id="hud">
+        <button class="minimap" id="minimap" title="地图（M）">
+          <canvas id="mm-canvas" width="80" height="56"></canvas>
+          <span class="mm-name" id="mm-name" hidden></span>
+        </button>
         <div class="clockbox">
           <div class="cb-main">
             <canvas class="cb-dial" id="h-dial" width="20" height="34"></canvas>
@@ -186,6 +191,7 @@ export function startApp(root: HTMLElement): void {
       hud();
     },
   });
+  world.minimapCanvas = $<HTMLCanvasElement>("#mm-canvas");
   const stage = new Stage(raceCanvas);
   stage.active = false;
   stage.time = "dusk";
@@ -214,6 +220,10 @@ export function startApp(root: HTMLElement): void {
     debt.classList.toggle("urgent", left <= 1);
     debt.title = `第${cn(weekOf(game.day))}周要还给马董`;
     debt.innerHTML = `<i class="seal-chip">债</i><b>${due.toLocaleString("zh-CN")}</b><small>${left === 0 ? "今夜" : `${left}天`}</small>`;
+    const place = world.regionName;
+    const mmName = $("#mm-name");
+    if (mmName.textContent !== place) mmName.textContent = place;
+    mmName.hidden = !place;
     toolbar();
   };
 
@@ -1053,6 +1063,45 @@ export function startApp(root: HTMLElement): void {
     leaveEventView(VENUE[kind]);
   };
 
+  /* ---------------- 大地图 ---------------- */
+
+  /** 大地图上的地名：几片地方的名字，和挂了匾的房子。 */
+  const MAP_PLACES: Array<{ text: string; x: number; z: number; big?: boolean }> = [
+    { text: "赛马场", x: 22, z: 25, big: true },
+    { text: "马蹄镇", x: 75, z: 30.5, big: true },
+    { text: "研究所", x: 124, z: 18, big: true },
+    { text: "赵家擂台", x: 120, z: 46, big: true },
+    { text: "牧场", x: 30, z: 87, big: true },
+    { text: "野原", x: 98, z: 94, big: true },
+    ...BUILDINGS.filter((b) => b.sign).map((b) => ({ text: b.sign as string, x: b.x + b.w / 2, z: b.z - 0.4 })),
+    { text: "擂台", x: RING.x, z: RING.z - RING.r - 1.6 },
+  ];
+
+  const openMap = (): void => {
+    const w = MAP_W * MAP_PX;
+    const h = MAP_H * MAP_PX;
+    const labels = MAP_PLACES.map(
+      (p) => `<span class="wm-label${p.big ? " big" : ""}" style="left:${((p.x / MAP_W) * 100).toFixed(2)}%;top:${((p.z / MAP_H) * 100).toFixed(2)}%">${esc(p.text)}</span>`,
+    ).join("");
+    panel("", `<div class="worldmap"><canvas id="wm-canvas" width="${w}" height="${h}"></canvas>${labels}</div>`, {}, { cls: "map" });
+    const c = $<HTMLCanvasElement>("#wm-canvas");
+    // 整数倍放大，像素方正；放不大的时候只留几片地方的名字。
+    const k = Math.max(1, Math.floor(Math.min((window.innerWidth * 0.86) / w, (window.innerHeight * 0.76) / h)));
+    c.parentElement?.classList.toggle("small", k < 2);
+    c.style.width = `${w * k}px`;
+    c.style.height = `${h * k}px`;
+    const loop = (t: number): void => {
+      if (!c.isConnected) return;
+      world.minimap.drawFull(c, world.mapMarks(), t / 1000);
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  };
+
+  $("#minimap").addEventListener("click", () => {
+    if (mode === "world" && talkEl.hidden && veil.hidden) openMap();
+  });
+
   /* ---------------- 菜单和开场 ---------------- */
 
   let confirmReset = false;
@@ -1087,7 +1136,7 @@ export function startApp(root: HTMLElement): void {
   };
 
   /** 新手提示只在开场信之后说一句。 */
-  const HOW_TO = "WASD 走动　E 互动　Tab 马厩";
+  const HOW_TO = "WASD 走动　E 互动　Tab 马厩　M 地图";
 
   const intro = (): void => {
     if (game.flags.intro) return;
@@ -1120,8 +1169,14 @@ export function startApp(root: HTMLElement): void {
     else if (el.dataset.horse) openDetail(el.dataset.horse);
   });
   window.addEventListener("keydown", (e) => {
-    if (mode !== "world" || !talkEl.hidden || !veil.hidden) return;
+    if (mode !== "world" || !talkEl.hidden) return;
     if ((e.target as HTMLElement | null)?.closest("input, textarea")) return;
+    if (e.key.toLowerCase() === "m") {
+      if (veil.hidden) openMap();
+      else if (panelEl.classList.contains("map")) closePanel();
+      return;
+    }
+    if (!veil.hidden) return;
     const n = Number(e.key);
     const h = n >= 1 && n <= TOOLBAR_HORSES ? game.horses[n - 1] : undefined;
     if (h) openDetail(h.id);
