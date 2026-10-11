@@ -233,7 +233,6 @@ export class Ambient {
   private puffs: Puff[] = [];
   private puffTimer = 0;
   private bits: Particle[] = [];
-  private fireflies: Array<{ x: number; y: number; phase: number; speed: number }> = [];
   private ripples: Array<{ x: number; y: number; t: number }> = [];
   private time = 0;
   /** 夜里鸡回窝。 */
@@ -371,10 +370,6 @@ export class Ambient {
       p.y += p.vy * dt;
     }
     this.bits = this.bits.filter((p) => p.t < p.life);
-    // 萤火虫：夜里在镜头里的草丛和水边。
-    const flies = day ? 0 : 18;
-    while (this.fireflies.length < flies) this.fireflies.push({ x: Math.random(), y: Math.random(), phase: Math.random() * 10, speed: 0.4 + Math.random() * 0.6 });
-    if (day) this.fireflies.length = 0;
     // 河里偶尔有鱼跳起来的水花。
     if (Math.random() < dt * 0.5) {
       const x = Math.floor((view.cx + Math.random() * view.bw) / TILE);
@@ -477,24 +472,49 @@ export class Ambient {
     }
   }
 
-  /** 夜里的萤火虫，画在夜色之后，自己发光。 */
+  /**
+   * 夜里的萤火虫，画在夜色之后，自己发光。
+   * 萤火虫钉在地图上：每 4×4 格一窝，位置由格子算出来，只在原地绕圈，镜头走动时跟着地面一起走。
+   */
   drawNight(b: Ctx, view: View, night: number): void {
     if (night < 0.4) return;
-    const { bw, bh } = view;
+    const { cx, cy, bw, bh } = view;
+    const CELL = TILE * 4;
     b.globalCompositeOperation = "lighter";
-    for (const f of this.fireflies) {
-      const t = this.time * f.speed + f.phase;
-      const x = Math.round(f.x * bw + Math.sin(t * 0.7) * 20);
-      const y = Math.round(f.y * bh + Math.cos(t * 0.5) * 14);
-      const glow = (Math.sin(t * 3) + 1) / 2;
-      if (glow < 0.2) continue;
-      b.fillStyle = `rgba(200,255,120,${0.25 * glow * night})`;
-      b.fillRect(x - 2, y - 2, 5, 5);
-      b.fillStyle = `rgba(230,255,160,${glow * night})`;
-      b.fillRect(x, y, 1, 1);
-    }
+    for (let gy = Math.floor((cy - 20) / CELL); gy <= Math.floor((cy + bh + 20) / CELL); gy++)
+      for (let gx = Math.floor((cx - 30) / CELL); gx <= Math.floor((cx + bw + 30) / CELL); gx++) {
+        const h = cellHash(gx, gy);
+        const count = h % 100 < 45 ? 0 : h % 100 < 85 ? 1 : 2;
+        for (let i = 0; i < count; i++) {
+          const hi = cellHash(gx * 7 + i, gy * 13 - i);
+          const hx = gx * CELL + (hi % CELL);
+          const hy = gy * CELL + ((hi >>> 8) % CELL);
+          // 只在草地、野地、牧场和水面上飞，不落到房顶和路上。
+          const k = tileAt(Math.floor(hx / TILE), Math.floor(hy / TILE));
+          if (k !== T.grass && k !== T.meadow && k !== T.paddock && k !== T.water && k !== T.infield) continue;
+          const phase = ((hi >>> 16) % 1000) / 100;
+          const speed = 0.4 + ((hi >>> 4) % 60) / 100;
+          const t = this.time * speed + phase;
+          const x = Math.round(hx - cx + Math.sin(t * 0.7) * 20);
+          const y = Math.round(hy - cy + Math.cos(t * 0.5) * 14);
+          if (x < -3 || y < -3 || x > bw + 3 || y > bh + 3) continue;
+          const glow = (Math.sin(t * 3) + 1) / 2;
+          if (glow < 0.2) continue;
+          b.fillStyle = `rgba(200,255,120,${0.25 * glow * night})`;
+          b.fillRect(x - 2, y - 2, 5, 5);
+          b.fillStyle = `rgba(230,255,160,${glow * night})`;
+          b.fillRect(x, y, 1, 1);
+        }
+      }
     b.globalCompositeOperation = "source-over";
   }
+}
+
+/** 格子坐标的整数散列（萤火虫的落点）。 */
+function cellHash(x: number, y: number): number {
+  let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (h ^ (h >>> 16)) >>> 0;
 }
 
 /** 烟囱口（缓冲坐标）。 */
