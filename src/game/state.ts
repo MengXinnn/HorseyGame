@@ -21,6 +21,7 @@ import {
   START_MONEY,
   SUMO_PRIZE,
   TIME_COST,
+  TRAVEL_TILES,
   betLimit,
   betPayout,
   type EventKind,
@@ -99,6 +100,8 @@ export interface GameState {
   reputation: number;
   lassos: number;
   player: { x: number; z: number };
+  /** 上一次记时间以后又走了多少格路（不满 TRAVEL_TILES 的零头）。 */
+  walked: number;
   pregnancies: Pregnancy[];
   entry: Entry | null;
   bet: Bet | null;
@@ -211,6 +214,7 @@ export function newGame(): GameState {
     reputation: 0,
     lassos: LASSOS_PER_DAY,
     player: { ...HOME },
+    walked: 0,
     pregnancies: [],
     entry: null,
     bet: null,
@@ -339,9 +343,21 @@ export function passTime(state: GameState, minutes: number): void {
   state.clock = Math.min(MIDNIGHT, state.clock + minutes);
 }
 
-/** 走到另一片地方。走路不会被拦下；走过了午夜就累倒在路边。 */
+/** 赶一段路（TRAVEL_TILES 格）。走路不会被拦下；走过了午夜就累倒在路边。 */
 export function travel(state: GameState): void {
   passTime(state, TIME_COST.travel);
+}
+
+/** 走了 tiles 格路。攒够一段就花一段路的时间，返回这次花了几段。 */
+export function walk(state: GameState, tiles: number): number {
+  state.walked = (state.walked ?? 0) + Math.max(0, tiles);
+  let legs = 0;
+  while (state.walked >= TRAVEL_TILES) {
+    state.walked -= TRAVEL_TILES;
+    travel(state);
+    legs++;
+  }
+  return legs;
 }
 
 /** 歇一会儿。 */

@@ -12,11 +12,11 @@ export const MIDNIGHT = 24 * 60;
 
 /**
  * 时间不会自己走：做一件事才花一段时间（分钟）。逛、看马、翻马厩、聊天都不花时间。
- * 每件改变局面的事至少花十分钟；走到另一片地方花一刻钟——在一片地方里随便逛不花，
- * 跑远路日子才慢慢往前挪。想快进就歇一会儿，或者直接等到傍晚开赛。
+ * 每件改变局面的事至少花十分钟；走路按路程算，每走 TRAVEL_TILES 格花一刻钟——
+ * 在一片地方里转转花不了多少，跑远路日子才慢慢往前挪。想快进就歇一会儿，或者直接等到傍晚开赛。
  */
 export const TIME_COST = {
-  /** 走到另一片地方（牧场、镇上、野原……）。 */
+  /** 每走 TRAVEL_TILES 格路。 */
   travel: 15,
   /** 扔一次套索。 */
   throwLasso: 10,
@@ -31,6 +31,9 @@ export const TIME_COST = {
   trial: 30,
   rest: 60,
 } as const;
+
+/** 走这么多格（大约走 9 秒、跑 5 秒）花 TIME_COST.travel 分钟。从家走到镇上的喷泉大约半小时。 */
+export const TRAVEL_TILES = 40;
 
 export const START_MONEY = 300;
 export const LASSOS_PER_DAY = 3;

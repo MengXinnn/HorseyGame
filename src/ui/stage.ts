@@ -1,7 +1,8 @@
 import type { BodyPlan } from "../body/bodyPlan";
 import { mix, rgba, shade } from "../render/color";
 import { drawCrowd } from "../render/crowd";
-import { lookFor, toScreen, type View } from "../render/horseArt";
+import { lookFor, toScreen, type HorseBubble, type View } from "../render/horseArt";
+import { thinkBubble } from "../world/labels";
 import { drawScene, drawTrackDetails, PALETTES, type Palette, type TimeOfDay } from "../render/scene";
 import type { HorsePose } from "../sim/horse";
 import { STEP, type Race } from "../sim/race";
@@ -189,6 +190,7 @@ export class Stage {
       return;
     }
     // 从后往前画：后排的马先画，被前排挡住。
+    const bubbles: HorseBubble[] = [];
     const order = race.runners.map((r, i) => ({ r, i, lane: this.laneOf(i) })).sort((a, b) => b.lane - a.lane);
     for (const { r, lane } of order) {
       const view = views[Math.min(lane, views.length - 1)] as View;
@@ -196,10 +198,12 @@ export class Stage {
       const pose = r.horse.pose();
       const look = lookFor(r.horse.plan, sc.rim);
       // 远处的马淡一点，突出玩家的马。
-      drawPixelHorse(ctx, pose, r.horse.plan, look, view, mode === "race" ? 1 - 0.05 * lane : 1);
+      const bubble = drawPixelHorse(ctx, pose, r.horse.plan, look, view, mode === "race" ? 1 - 0.05 * lane : 1);
+      if (bubble) bubbles.push(bubble);
     }
     if (mode === "race") this.drawForeground(front, palette);
     const screen = this.surface.present();
+    for (const b of bubbles) thinkBubble(screen, b.x, b.y, b.text, 2);
     for (const l of this.labels) pixelText(screen, l.text, l.x, l.y, { color: l.color, align: "center" });
     if (mode === "race")
       for (const { r, i, lane } of order) {

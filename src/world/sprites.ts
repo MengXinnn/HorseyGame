@@ -19,40 +19,97 @@ export function canvas(w: number, h: number): [HTMLCanvasElement, Ctx] {
   return [c, ctx];
 }
 
-/** 字体加载完成前画的字会用后备字体，所以缓存要等字体到位。 */
-export const fontReady = (): boolean => document.fonts.check(`12px ${PIXEL_FONT}`);
+/** 字体加载完成前画的字会用后备字体，所以缓存要等字体到位。给了 text 时只看这几个字所在的分片是否已加载。 */
+export const fontReady = (text?: string): boolean => document.fonts.check(`12px ${PIXEL_FONT}`, text);
 
 const textCache = new Map<string, HTMLCanvasElement>();
+/** 已经请求加载过的字（字体按字符分片，用到才下载）。 */
+const requested = new Set<string>();
+
+/** 先放大这么多倍画字，再取每个字像素的中心点。 */
+const SS = 4;
+/** 放大画字的画布有多少行（字像素），基线画在第几行。留得很宽，什么系统都不会画出界。 */
+const BIG_H = 28;
+const BASE = 18;
+
+/** 按基线画一段字，在每个字像素中心取样，返回 BIG_H 行、W 列的「有没有」。 */
+function rasterize(text: string, W: number): Uint8Array {
+  const [big, bctx] = canvas(W * SS, BIG_H * SS);
+  bctx.font = `${12 * SS}px ${PIXEL_FONT}`;
+  bctx.textBaseline = "alphabetic";
+  bctx.fillStyle = "#000";
+  bctx.fillText(text, 2 * SS, BASE * SS);
+  const src = bctx.getImageData(0, 0, W * SS, BIG_H * SS).data;
+  big.width = 0;
+  const out = new Uint8Array(W * BIG_H);
+  for (let y = 0; y < BIG_H; y++)
+    for (let x = 0; x < W; x++) if (src[((y * SS + SS / 2) * W * SS + x * SS + SS / 2) * 4 + 3]! >= 128) out[y * W + x] = 1;
+  return out;
+}
+
+/** 满格汉字的顶在放大画布的第几行；字体到位后量一次就记住。 */
+let capTop: number | null = null;
+function measureCapTop(): number {
+  if (capTop !== null) return capTop;
+  const W = 16;
+  const m = rasterize("国", W);
+  let top = BASE - 11;
+  for (let y = 0; y < BIG_H; y++)
+    if (m.subarray(y * W, y * W + W).some((v) => v)) {
+      top = y;
+      break;
+    }
+  if (fontReady("国")) capTop = top;
+  return top;
+}
 
 /**
- * 像素字：12px 像素字体画进小画布，透明度一刀切成 0/255，
- * 去掉浏览器的抗锯齿灰边，放大后才是干净的方块字。可选一圈描边。
+ * 像素字：12px 像素字体，每个字像素只有「有」和「没有」，放大后是干净的方块字。可选一圈描边。
+ * 画出来是 16 行高的小画布：左边空 2 列，满格汉字占第 1 到 11 行，下面留给 g、y 这类下伸笔画。
+ *
+ * 两个坑：
+ * - 不能直接按 12px 画再把透明度一刀切：有的系统会把字形摆在半个像素上，一笔横跨两行、
+ *   每行都只有一半深，切完整行笔画就没了。所以先按 4 倍大小画，再在每个字像素正中取样。
+ * - 不能用 textBaseline = "top" 定位：各家浏览器对「顶」的理解不一样（Safari 会把字往下放几个像素，
+ *   底下几行就画出了画布）。所以按字母基线画在一张很高的画布上，量出满格汉字的顶在哪，再对齐到第 1 行。
  */
 export function textSprite(text: string, color: string, line: string | null = null): HTMLCanvasElement {
   const key = `${text}|${color}|${line}`;
   const hit = textCache.get(key);
   if (hit) return hit;
+  const ready = fontReady(text);
+  if (!ready && !requested.has(text)) {
+    requested.add(text);
+    void document.fonts.load(`12px ${PIXEL_FONT}`, text);
+  }
   const [m, mctx] = canvas(1, 1);
   mctx.font = `12px ${PIXEL_FONT}`;
   const w = Math.ceil(mctx.measureText(text).width) + 2;
-  const [c, ctx] = canvas(w + 2, 16);
-  ctx.font = `12px ${PIXEL_FONT}`;
-  ctx.textBaseline = "top";
-  ctx.fillStyle = color;
-  ctx.fillText(text, 2, 2);
-  if (line) outline(c, line, 100);
-  else hardEdge(c, 100);
   m.width = 0;
-  if (fontReady()) textCache.set(key, c);
-  return c;
-}
-
-function hardEdge(c: HTMLCanvasElement, threshold: number): void {
-  const ctx = c.getContext("2d") as Ctx;
-  const img = ctx.getImageData(0, 0, c.width, c.height);
+  const W = w + 2;
+  const H = 16;
+  const mask = rasterize(text, W);
+  const shift = measureCapTop() - 1;
+  const [c, ctx] = canvas(W, H);
+  const img = ctx.createImageData(W, H);
   const d = img.data;
-  for (let i = 3; i < d.length; i += 4) d[i] = d[i]! >= threshold ? 255 : 0;
+  const [r, g, b] = [parseInt(color.slice(1, 3), 16), parseInt(color.slice(3, 5), 16), parseInt(color.slice(5, 7), 16)];
+  for (let y = 0; y < H; y++) {
+    const sy = y + shift;
+    if (sy < 0 || sy >= BIG_H) continue;
+    for (let x = 0; x < W; x++) {
+      if (!mask[sy * W + x]) continue;
+      const i = (y * W + x) * 4;
+      d[i] = r;
+      d[i + 1] = g;
+      d[i + 2] = b;
+      d[i + 3] = 255;
+    }
+  }
   ctx.putImageData(img, 0, 0);
+  if (line) outline(c, line, 100);
+  if (ready && capTop !== null) textCache.set(key, c);
+  return c;
 }
 
 export const px = (ctx: Ctx, x: number, y: number, color: string, w = 1, h = 1): void => {

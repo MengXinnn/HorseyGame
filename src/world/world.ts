@@ -1,8 +1,7 @@
 import { hashSeed } from "../sim/rng";
 import { express } from "../genome/genome";
-import { addCaught, canCatch, HOME, isFoal, throwLasso, travel, wildHerd, type GameState } from "../game/state";
+import { addCaught, canCatch, HOME, isFoal, throwLasso, walk, wildHerd, type GameState } from "../game/state";
 import {
-  arrivedRegion,
   BUILDINGS,
   INTERACTS,
   inside,
@@ -29,7 +28,7 @@ import {
   type Prop,
   type PropKind,
 } from "./tiles";
-import { banner, bubble, floatText, nameTag } from "./labels";
+import { banner, bubble, floatText, nameTag, signText, thinkBubble } from "./labels";
 import { bakeGround, canvas, icon, personFrame, PLAYER_LOOK, type Dir, type PersonLook } from "./sprites";
 import { propSprite } from "./props";
 import { bakeBuildingShadows, buildingSprite } from "./buildingArt";
@@ -200,7 +199,6 @@ export class WorldScene {
   /** 画面上的钟：做了事以后时间一下子跳过去，天色跟着几秒内慢慢转过去。 */
   private shown = 0;
   /** 上回在哪片地方算过路上的时间。 */
-  private place = "";
   /** 打开面板、比赛进行中时暂停世界（时钟也停）。 */
   paused = false;
   active = true;
@@ -251,7 +249,6 @@ export class WorldScene {
       s.player = { ...HOME };
     }
     if (!walkable(s.player.x, s.player.z)) s.player = { ...HOME };
-    this.place = regionAt(s.player.x, s.player.z)?.id ?? "";
   }
 
   /** 马厩里的马变了、换了一天：重建牧场里的马和野马群。 */
@@ -400,16 +397,11 @@ export class WorldScene {
   private update(dt: number): void {
     this.time += dt;
     const s = this.state;
+    // 时间不会自己走：按走过的路程记时间，攒够一段路才花一刻钟。传送（比赛完回场边）不算。
+    const [x0, z0] = [s.player.x, s.player.z];
     this.movePlayer(dt);
-    // 时间不会自己走：只有走到另一片地方，路上才花一段时间。
-    const arrived = arrivedRegion(s.player.x, s.player.z);
-    if (arrived && arrived.id !== this.place) {
-      if (this.place) {
-        travel(s);
-        this.hooks.onChange();
-      }
-      this.place = arrived.id;
-    }
+    const step = Math.hypot(s.player.x - x0, s.player.z - z0);
+    if (step > 0 && step < 2 && walk(s, step) > 0) this.hooks.onChange();
     this.updatePaddock(dt);
     this.updateHerd(dt);
     this.tiedun?.update(dt);
@@ -728,6 +720,11 @@ export class WorldScene {
         draw: () => {
           if (behind) b.globalAlpha = 0.55;
           b.drawImage(sp.img, sx, sy);
+          const [Z, k] = [this.screenPx, this.textPx];
+          for (const tx of sp.texts) {
+            const [x, y] = [(sx + tx.x) * Z, (sy + tx.y) * Z];
+            this.labels.push((sc) => signText(sc, x, y, tx.text, tx.color, k, tx.w * Z, amb.color, behind ? 0.55 : 1));
+          }
           if (sp.hub) drawBlades(b, ox + sp.hub[0] - cx, oy + sp.hub[1] - cy, t);
           b.globalAlpha = 1;
         },
@@ -842,7 +839,12 @@ export class WorldScene {
         draw: () => {
           shadow(b, x - cx, y - cy, Math.round(11 * h.scale));
           const r = h.drawPixel(b, x - cx, y - cy, HORSE_PPM);
-          if (onClick) this.hits.push({ ...r, act: onClick });
+          if (onClick) this.hits.push({ x: r.x, y: r.y, w: r.w, h: r.h, act: onClick });
+          if (r.bubble) {
+            const { text, x: bx, y: by } = r.bubble;
+            const [Z, k] = [this.screenPx, this.textPx];
+            this.labels.push((sc) => thinkBubble(sc, Math.round(bx) * Z, Math.round(by) * Z, text, k));
+          }
           // 马头顶的高度：按体型估，不用缓冲画布的上沿（那里留了空白）。
           const top = Math.round(y - cy - 2.5 * HORSE_PPM * h.scale);
           if (tag && Math.hypot(h.x - s.player.x, h.z - s.player.z) < 5) {

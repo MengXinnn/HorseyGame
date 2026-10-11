@@ -170,14 +170,6 @@ export function regionAt(x: number, z: number): Region | undefined {
   return REGIONS.find((r) => x >= r.rect.x0 && x < r.rect.x1 && z >= r.rect.z0 && z < r.rect.z1);
 }
 
-/**
- * 走进了哪片地方：要走进去至少 margin 格才算到了，在边上来回蹭不算。
- * 走路花的时间按「到了另一片地方」算（见 TIME_COST.travel）。
- */
-export function arrivedRegion(x: number, z: number, margin = 2): Region | undefined {
-  return REGIONS.find((r) => x >= r.rect.x0 + margin && x < r.rect.x1 - margin && z >= r.rect.z0 + margin && z < r.rect.z1 - margin);
-}
-
 /* ---------------- 地面 ---------------- */
 
 const inRect = (r: Rect, x: number, z: number): boolean => x >= r.x0 && x < r.x1 && z >= r.z0 && z < r.z1;

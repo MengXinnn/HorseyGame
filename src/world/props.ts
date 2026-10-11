@@ -2,7 +2,7 @@
  * 摆设的像素画：树、花坛、长凳、货摊、喷泉……都按 3/4 俯视画：
  * 顶面看得见（亮），正面在下（暗一点），光从左上来。画一次缓存成小画布。
  */
-import { blob, canvas, outline, px, textSprite } from "./sprites";
+import { blob, canvas, outline, px } from "./sprites";
 import type { Prop } from "./tiles";
 
 type Ctx = CanvasRenderingContext2D;
@@ -668,7 +668,7 @@ function woodpile(): Sprite {
   );
 }
 
-const SIGNS = ["牧", "镇", "野", "擂"];
+/** 路牌：木牌上画一个箭头（牌子太小，写不下能看清的字；地名进了那片地方会滑出来）。 */
 function signpost(v: number): Sprite {
   return sprite(
     22,
@@ -682,7 +682,12 @@ function signpost(v: number): Sprite {
       px(ctx, 20, 5, "#a8733f", 1, 4);
       px(ctx, 2, 3, "#c99a5a", 16, 1);
       px(ctx, 2, 10, "#7a4a24", 18, 1);
-      ctx.drawImage(textSprite(SIGNS[v % 4]!, "#3b1c0e"), 4, 0);
+      // 箭头：横杆加三角头，深色；单数的牌子还多一道刻痕，免得每块都一样。
+      px(ctx, 5, 6, "#3b1c0e", 8, 2);
+      px(ctx, 12, 4, "#3b1c0e", 1, 6);
+      px(ctx, 13, 5, "#3b1c0e", 1, 4);
+      px(ctx, 14, 6, "#3b1c0e", 1, 2);
+      if (v % 2) px(ctx, 4, 9, "#8a5a32", 10, 1);
     },
     "#2a1a12",
   );
