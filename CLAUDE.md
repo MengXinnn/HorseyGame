@@ -7,9 +7,10 @@
 - 文字说明尽量少，保持简洁。能看出来的就不写；实在需要解释的放进悬停提示（title），不占屏幕。
 - 不要用「·」连接几段信息。并列的信息用间距（`parts()`）、标签（`.tag`）或分组排开。
 - 不用毛玻璃（`backdrop-filter`）、半透明卡片和圆角渐变。边框用 `src/ui/pixelui.ts` 画的九宫格（`--f-menu` 木框、`--f-slot` 道具格、`--f-btn` 按钮、`--f-plank` 木牌、`--f-paper` 纸条）。
-- 像素美术全部用代码画（`src/world/sprites.ts`），没有外部图片。一个美术像素在屏幕上是 3px（`--u`），画布用 `imageSmoothingEnabled = false`，图片用 `image-rendering: pixelated`。
+- 像素美术全部用代码画（地面和人物 `src/world/sprites.ts`、摆设 `props.ts`、房子 `buildingArt.ts`），没有外部图片。一个美术像素在屏幕上是 3px（`--u`），画布用 `imageSmoothingEnabled = false`，图片用 `image-rendering: pixelated`。
 - 字体只用缝合像素 12px（`PIXEL_FONT`）。CSS 字号用 12 的倍数（12/24/36px）；画布里的字用 `textSprite()`，不要直接 `fillText`，否则会糊。
 - 赛场和相扑台先画进 1/3 大小的缓冲再放大（`src/ui/pixelCanvas.ts`），名牌和计时用像素字画在屏幕上。
+- 大世界是 3/4 俯视：房子和摆设都要看得见顶面（亮）和正面（暗），光从左上来，影子落在右下。渐变用分层 + Bayer 抖动（`src/world/raster.ts`），不用平滑渐变。
 
 ## 常用命令
 

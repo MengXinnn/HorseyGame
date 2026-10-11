@@ -1,10 +1,18 @@
 import type { BodyPlan } from "../body/bodyPlan";
-import { rgba, shade } from "../render/color";
+import { mix, rgba, shade } from "../render/color";
+import { drawCrowd } from "../render/crowd";
 import { lookFor, toScreen, type View } from "../render/horseArt";
-import { drawScene, drawTrackDetails, PALETTES, type TimeOfDay } from "../render/scene";
+import { drawScene, drawTrackDetails, PALETTES, type Palette, type TimeOfDay } from "../render/scene";
 import type { HorsePose } from "../sim/horse";
 import { STEP, type Race } from "../sim/race";
+import { hashSeed } from "../sim/rng";
+import { lightSprite } from "../world/lighting";
 import { drawPixelHorse, PixelSurface, pixelBox, pixelText, PX } from "./pixelCanvas";
+
+/** 看台离镜头比最后一条泳道还远一点，按这个比例慢一些地滚动（视差）。 */
+const CROWD_DEPTH = 0.8;
+/** 一段看台多长（米）。 */
+const SECTION = 24;
 
 const NECK_ANGLE = 0.95;
 
@@ -169,11 +177,11 @@ export class Stage {
     const views = this.laneViews(W, H, n);
     const front = views[0] as View;
     const horizon = mode === "race" ? (views[views.length - 1] as View).groundY - 26 : front.groundY;
-    const sc = drawScene(ctx, W, H, this.time, this.camX * front.ppm * 0.6, this.wall * 1000, horizon / H);
+    const sc = drawScene(ctx, W, H, this.time, this.camX * front.ppm * 0.6, this.wall * 1000, horizon / H, PX);
     const palette = PALETTES[this.time];
 
-    if (mode === "race" && race) this.drawRaceTrack(views, race.options.distance, palette.rim, palette.grass);
-    else drawTrackDetails(ctx, W, H, this.time, this.camX * front.ppm, front.groundY, front.ppm * 2.5);
+    if (mode === "race" && race) this.drawRaceTrack(views, race, palette, horizon);
+    else drawTrackDetails(ctx, W, H, this.time, this.camX * front.ppm, front.groundY, front.ppm * 2.5, PX);
     if (mode === "trial") this.drawMeterMarks(front, palette.rim);
 
     if (!race) {
@@ -184,12 +192,13 @@ export class Stage {
     const order = race.runners.map((r, i) => ({ r, i, lane: this.laneOf(i) })).sort((a, b) => b.lane - a.lane);
     for (const { r, lane } of order) {
       const view = views[Math.min(lane, views.length - 1)] as View;
-      this.drawDust(view, lane, palette.ground);
+      this.drawDust(view, lane, palette);
       const pose = r.horse.pose();
       const look = lookFor(r.horse.plan, sc.rim);
       // 远处的马淡一点，突出玩家的马。
       drawPixelHorse(ctx, pose, r.horse.plan, look, view, mode === "race" ? 1 - 0.05 * lane : 1);
     }
+    if (mode === "race") this.drawForeground(front, palette);
     const screen = this.surface.present();
     for (const l of this.labels) pixelText(screen, l.text, l.x, l.y, { color: l.color, align: "center" });
     if (mode === "race")
@@ -200,51 +209,232 @@ export class Stage {
     this.drawHud(screen, W, race);
   }
 
-  private drawRaceTrack(views: View[], distance: number, rim: string, grass: string): void {
+  /**
+   * 平地赛的赛场：远处是一段段看台和人群（终点附近是带顶棚的大看台），
+   * 外圈白栏杆、一条条泳道的土、起点终点线和距离杆。全按缓冲像素画，放大后不糊。
+   */
+  private drawRaceTrack(views: View[], race: Race, P: Palette, horizon: number): void {
     const ctx = this.ctx;
-    const backV = views[views.length - 1] as View;
-    const frontV = views[0] as View;
-    // 泳道分隔线。
-    ctx.strokeStyle = rgba(rim, 0.12);
-    ctx.lineWidth = 1;
-    for (let i = 0; i < views.length; i++) {
-      const v = views[i] as View;
-      ctx.beginPath();
-      ctx.moveTo(0, v.groundY + 2);
-      ctx.lineTo(v.width, v.groundY + 2);
-      ctx.stroke();
-    }
-    // 每 25 米一根标杆，起点和终点画横贯所有泳道的线。
-    const marks: number[] = [];
-    for (let m = 0; m <= distance; m += 25) marks.push(m);
-    for (const m of marks) {
-      const [bx, by] = toScreen(backV, { x: m, y: 0 });
-      const [fx, fy] = toScreen(frontV, { x: m, y: 0 });
-      if (Math.max(bx, fx) < -40 || Math.min(bx, fx) > frontV.width + 40) continue;
-      const isEnd = m === 0 || m === distance;
-      ctx.strokeStyle = isEnd ? rgba("#ffffff", 0.75) : rgba(rim, 0.25);
-      ctx.lineWidth = isEnd ? 4 : 1.5;
-      ctx.beginPath();
-      ctx.moveTo(bx, by - 6);
-      ctx.lineTo(fx, fy + 10);
-      ctx.stroke();
-      if (isEnd || m % 100 === 0) this.labels.push({ x: bx, y: by - 40, text: m === distance ? "终点" : m === 0 ? "起点" : `${m}`, color: isEnd ? "#fff2d0" : "#f6d05a" });
-      if (m === distance) {
-        // 终点旗杆和彩带。
-        ctx.strokeStyle = shade(grass, 0.6);
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(bx, by - 6);
-        ctx.lineTo(bx, by - 90);
-        ctx.stroke();
-        ctx.fillStyle = "#e85d4a";
-        ctx.beginPath();
-        ctx.moveTo(bx, by - 90);
-        ctx.lineTo(bx + 34, by - 80);
-        ctx.lineTo(bx, by - 70);
-        ctx.fill();
+    const back = views[views.length - 1] as View;
+    const front = views[0] as View;
+    const bw = Math.ceil(front.width / PX);
+    const bh = Math.ceil(this.surface.H / PX);
+    const hy = Math.round(horizon / PX);
+    const distance = race.options.distance;
+    const lit = P.stars > 0.2;
+    const t = this.wall;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    const rect = (x: number, y: number, w: number, h: number, c: string): void => {
+      ctx.fillStyle = c;
+      ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+    };
+
+    /* ---- 看台和人群 ---- */
+    const cppm = (back.ppm * CROWD_DEPTH) / PX;
+    const anchorX = bw * (back.anchor ?? 0.5);
+    const toCrowd = (m: number): number => (m - this.camX) * cppm + anchorX;
+    const fromCrowd = (x: number): number => (x - anchorX) / cppm + this.camX;
+    const offset = this.camX * cppm - anchorX;
+    const lead = Math.max(...race.runners.map((r) => r.horse.pose().torso.x));
+    const cheer = (x: number): number => {
+      const m = fromCrowd(x);
+      const near = Math.max(0, 1 - Math.abs(m - lead) / 30);
+      return Math.min(1, 0.08 + near * 0.9 + (race.finished ? 0.5 : 0) + (m > distance - 60 ? 0.15 : 0));
+    };
+    const haze = P.fog;
+    const base = hy - 2;
+    const lamps: Array<[number, number]> = [];
+    const s0 = Math.floor(fromCrowd(-30) / SECTION);
+    const s1 = Math.floor(fromCrowd(bw + 30) / SECTION);
+    for (let si = s0; si <= s1; si++) {
+      const xa = Math.round(toCrowd(si * SECTION));
+      const xb = Math.round(toCrowd((si + 1) * SECTION));
+      const h = hashSeed(`看台${si}`);
+      const grand = (si + 1) * SECTION > distance - 130 && si * SECTION < distance + 40;
+      const kind = grand ? "grand" : si * SECTION < -40 ? (h % 2 ? "trees" : "stand") : h % 10 < 5 ? "bleach" : h % 10 < 8 ? "stand" : "trees";
+      const crowd = (rows: number, seats: boolean, density: number): void =>
+        drawCrowd(ctx, { x0: xa, x1: xb, base, rows, offset, time: t, cheer, seed: `${si}`, haze, hazeAmount: 0.18, seats, density });
+      if (kind === "grand") {
+        // 大看台：深色后墙、六排座位、顶棚和彩旗边，几根白柱子。
+        const rows = 6;
+        const top = base - rows * 6 - 12;
+        rect(xa, top + 6, xb - xa, base - top - 6, mix("#4a3020", haze, 0.3));
+        crowd(rows, true, 0.92);
+        for (let x = xa + ((si * 7) % 30); x < xb; x += 30) rect(x, top + 6, 2, base - top - 6, mix("#f4f1e6", haze, 0.2));
+        rect(xa - 1, top, xb - xa + 2, 6, mix("#3c4a5e", haze, 0.25));
+        rect(xa - 1, top, xb - xa + 2, 1, mix("#6a7a90", haze, 0.25));
+        for (let x = xa; x < xb; x += 4) rect(x, top + 6, 4, 2, Math.floor(x / 4) % 2 ? mix("#f4ead2", haze, 0.2) : mix("#c9302a", haze, 0.2));
+        for (let x = xa + 2; x < xb; x += 8) rect(x + 1, top + 8, 2, 1, Math.floor(x / 8) % 2 ? mix("#f4ead2", haze, 0.2) : mix("#c9302a", haze, 0.2));
+        if (si % 2 === 0) lamps.push([xa + 4, top - 18]);
+        // 顶棚正中挂块大牌子。
+        const mid = Math.floor((distance - 50) / SECTION);
+        if (si === mid) {
+          const cx = Math.round((xa + xb) / 2);
+          rect(cx - 30, top - 12, 60, 12, "#3b1c0e");
+          rect(cx - 29, top - 11, 58, 10, "#c9302a");
+          rect(cx - 29, top - 11, 58, 1, "#f06a50");
+          this.labels.push({ x: cx * PX, y: (top - 13) * PX, text: "马蹄镇赛马", color: "#f6d05a" });
+        }
+      } else if (kind === "bleach") {
+        crowd(3, true, 0.8);
+        if (si % 3 === 0) lamps.push([xa + 2, base - 44]);
+        // 一根旗杆，上面一面小三角旗。
+        const fx = xa + 3;
+        rect(fx, base - 32, 1, 32, mix("#5a4632", haze, 0.2));
+        const wave = Math.sin(t * 5 + si) > 0 ? 1 : 0;
+        rect(fx + 1, base - 32 + wave, 6, 2, mix(["#d8443a", "#f2b632", "#3f7fd0", "#4fa64a"][h % 4]!, haze, 0.2));
+        rect(fx + 1, base - 30 + wave, 3, 1, mix(["#d8443a", "#f2b632", "#3f7fd0", "#4fa64a"][h % 4]!, haze, 0.2));
+      } else if (kind === "stand") {
+        // 站着看的人，中间一顶条纹帐篷（卖吃的）。
+        const tx = Math.round((xa + xb) / 2) - 14;
+        if (h % 3 !== 0) {
+          for (let x = 0; x < 28; x++) {
+            const c = Math.floor(x / 4) % 2 ? "#f4ead2" : ["#c9302a", "#3f6fb0", "#4f8f30"][h % 3]!;
+            rect(tx + x, base - 22 + Math.abs(14 - x) / 5, 1, 6, mix(c, haze, 0.25));
+          }
+          rect(tx + 1, base - 16, 1, 16, mix("#5a3a22", haze, 0.25));
+          rect(tx + 26, base - 16, 1, 16, mix("#5a3a22", haze, 0.25));
+          rect(tx + 2, base - 7, 24, 5, mix("#9a6232", haze, 0.25));
+        }
+        crowd(2, false, 0.7);
+      } else {
+        // 几棵树，树下零星几个人。
+        for (let k = 0; k < 3; k++) {
+          const cx = xa + ((xb - xa) * (k + 0.5)) / 3 + ((h >>> (k * 3)) % 7) - 3;
+          const r = 7 + ((h >>> (k * 4)) % 4);
+          const g = mix(P.hills[3], P.grass, 0.4);
+          rect(cx - 1, base - 8, 2, 8, mix("#4a3020", haze, 0.35));
+          for (let dy = -r; dy <= r; dy++) {
+            const w = Math.round(Math.sqrt(r * r - dy * dy));
+            rect(cx - w, base - 8 - r + dy, w * 2, 1, dy < -r / 3 ? shade(g, 0.12) : g);
+          }
+        }
+        crowd(1, false, 0.3);
       }
     }
+    // 夜里和傍晚，看台上的探照灯亮着。
+    for (const [x, y] of lamps) {
+      rect(x, y, 1, base - y, mix("#8a9098", haze, 0.3));
+      rect(x - 2, y - 2, 5, 3, "#3a3e46");
+      rect(x - 1, y - 1, 3, 1, lit ? "#fff6d8" : "#c6ccd4");
+    }
+    if (lit) {
+      ctx.globalCompositeOperation = "lighter";
+      for (const [x, y] of lamps) {
+        ctx.globalAlpha = 0.75;
+        ctx.drawImage(lightSprite(18, "#fff0c8"), x - 18, y - 18);
+      }
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+    }
+
+    /* ---- 跑道：一条条泳道的土 ---- */
+    const g = views.map((v) => Math.round(v.groundY / PX));
+    const dirt = dirtColor(P);
+    rect(0, hy, bw, bh - hy, shade(dirt, -0.08));
+    for (let i = views.length - 1; i >= 0; i--) {
+      const top = i === views.length - 1 ? hy + 2 : Math.round((g[i]! + g[i + 1]!) / 2);
+      const bot = i === 0 ? bh : Math.round((g[i]! + g[i - 1]!) / 2);
+      const depth = views.length > 1 ? i / (views.length - 1) : 0;
+      const c = mix(i % 2 ? shade(dirt, -0.06) : dirt, P.fog, depth * 0.18);
+      rect(0, top, bw, bot - top, c);
+      rect(0, g[i]! + 2, bw, 1, shade(c, -0.12));
+      rect(0, top, bw, 1, shade(c, 0.08));
+      // 土里的小石子和蹄印，跟着这条泳道的远近一起滚动。
+      const v = views[i] as View;
+      const left = this.camX - ((v.anchor ?? 0.5) * v.width) / v.ppm;
+      const right = left + v.width / v.ppm;
+      const stepM = Math.max(0.12, (3 * PX) / v.ppm);
+      for (let m = Math.floor(left / stepM) * stepM; m < right; m += stepM) {
+        const hh = hashSeed(`土${i}:${Math.round(m / stepM)}`);
+        if (hh % 5 > 1) continue;
+        const [x] = toScreen(v, { x: m, y: 0 });
+        const y = top + 1 + (hh >>> 4) % Math.max(1, bot - top - 2);
+        rect(x / PX, y, hh % 7 === 0 ? 2 : 1, 1, (hh >>> 8) % 2 ? shade(c, 0.14) : shade(c, -0.18));
+      }
+    }
+
+    /* ---- 外圈栏杆 ---- */
+    const rail = mix("#f4f1e6", haze, 0.12);
+    const railShade = mix("#9a9584", haze, 0.12);
+    rect(0, hy - 3, bw, 1, rail);
+    rect(0, hy - 2, bw, 1, railShade);
+    rect(0, hy, bw, 1, rail);
+    const bl = this.camX - ((back.anchor ?? 0.5) * back.width) / back.ppm;
+    const br = bl + back.width / back.ppm;
+    for (let m = Math.floor(bl / 2) * 2; m < br; m += 2) {
+      const x = Math.round(toScreen(back, { x: m, y: 0 })[0] / PX);
+      rect(x, hy - 4, 1, 6, rail);
+      rect(x + 1, hy - 3, 1, 5, railShade);
+    }
+
+    /* ---- 起点、终点、距离杆 ---- */
+    for (let m = 0; m <= distance; m += 25) {
+      const [bx, by] = toScreen(back, { x: m, y: 0 });
+      const [fx, fy] = toScreen(front, { x: m, y: 0 });
+      if (Math.max(bx, fx) < -40 || Math.min(bx, fx) > front.width + 40) continue;
+      const isEnd = m === 0 || m === distance;
+      const y0 = Math.round(by / PX) - 1;
+      const y1 = Math.round(fy / PX) + 3;
+      for (let y = y0; y <= y1; y++) {
+        const k = (y - y0) / Math.max(1, y1 - y0);
+        const x = Math.round((bx + (fx - bx) * k) / PX);
+        if (m === distance) {
+          rect(x - 1, y, 1, 1, (y + 0) % 2 ? "#2a2a2a" : "#fbfaf2");
+          rect(x, y, 1, 1, (y + 1) % 2 ? "#2a2a2a" : "#fbfaf2");
+          rect(x + 1, y, 1, 1, y % 2 ? "#2a2a2a" : "#fbfaf2");
+        } else if (isEnd) rect(x - 1, y, 2, 1, "#fbfaf2");
+        else if (m % 100 === 0 && y % 3 === 0) rect(x, y, 1, 1, mix("#fbfaf2", dirt, 0.5));
+      }
+      // 外栏上的距离杆：每 100 米红牌子。
+      const px = Math.round(bx / PX);
+      rect(px, hy - 12, 1, 12, rail);
+      rect(px - 1, hy - 15, 3, 3, m % 100 === 0 || isEnd ? "#d23a2a" : "#f4f1e6");
+      if (isEnd || m % 100 === 0) this.labels.push({ x: bx, y: by - 40, text: m === distance ? "终点" : m === 0 ? "起点" : `${m}`, color: isEnd ? "#fff2d0" : "#f6d05a" });
+      if (m === distance) {
+        // 终点：高高的旗杆，挂一面黑白格的旗。
+        rect(px, hy - 40, 2, 40, "#e8e4d8");
+        const wave = Math.round(Math.sin(t * 6) * 1);
+        for (let yy = 0; yy < 6; yy++) for (let xx = 0; xx < 10; xx++) rect(px + 2 + xx, hy - 40 + yy + (xx > 5 ? wave : 0), 1, 1, (Math.floor(xx / 2) + Math.floor(yy / 2)) % 2 ? "#2a2a2a" : "#fbfaf2");
+      }
+    }
+    ctx.restore();
+  }
+
+  /** 最前面的内圈栏杆和一窄条草地，比马还近，滚得快一点。 */
+  private drawForeground(front: View, P: Palette): void {
+    const ctx = this.ctx;
+    const bw = Math.ceil(front.width / PX);
+    const bh = Math.ceil(this.surface.H / PX);
+    const y = bh - 6;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const grass = mix(P.grass, "#4f8a3a", 0.35);
+    ctx.fillStyle = grass;
+    ctx.fillRect(0, y + 2, bw, bh - y - 2);
+    const ppm = (front.ppm * 1.15) / PX;
+    const ax = bw * (front.anchor ?? 0.5);
+    const left = this.camX - ax / ppm;
+    ctx.fillStyle = shade(grass, 0.18);
+    for (let m = Math.floor(left / 0.7) * 0.7; m < left + bw / ppm; m += 0.7) {
+      const x = Math.round((m - this.camX) * ppm + ax);
+      const hh = hashSeed(`草${Math.round(m / 0.7)}`);
+      ctx.fillRect(x, y + 2 + (hh % 3), 1, 2);
+    }
+    const rail = mix("#f4f1e6", P.rim, 0.15);
+    ctx.fillStyle = rail;
+    ctx.fillRect(0, y - 2, bw, 1);
+    ctx.fillRect(0, y + 1, bw, 1);
+    for (let m = Math.floor(left / 2.5) * 2.5; m < left + bw / ppm; m += 2.5) {
+      const x = Math.round((m - this.camX) * ppm + ax);
+      ctx.fillStyle = rail;
+      ctx.fillRect(x, y - 3, 2, 9);
+      ctx.fillStyle = "#9a9584";
+      ctx.fillRect(x + 1, y - 2, 1, 8);
+    }
+    ctx.restore();
   }
 
   private drawMeterMarks(view: View, rim: string): void {
@@ -347,15 +537,27 @@ export class Stage {
     this.dust = this.dust.filter((d) => d.life > 0);
   }
 
-  private drawDust(view: View, lane: number, ground: string): void {
+  /** 扬起的土：缓冲里的方块，越旧越淡。 */
+  private drawDust(view: View, lane: number, P: Palette): void {
     const ctx = this.ctx;
-    const color = shade(ground, 0.55);
+    const light = mix(dirtColor(P), "#ffffff", 0.25);
+    const dark = shade(dirtColor(P), -0.1);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     for (const d of this.dust) {
       if (d.lane !== lane) continue;
       const [x, y] = toScreen(view, d);
-      ctx.fillStyle = rgba(color, 0.35 * d.life);
-      const r = Math.max(PX, Math.round((d.size * view.ppm) / PX) * PX);
-      ctx.fillRect(Math.round(x / PX) * PX - r, Math.round(y / PX) * PX - r, r * 2, r * 2);
+      const r = Math.max(1, Math.round((d.size * view.ppm) / PX));
+      ctx.globalAlpha = d.life > 0.6 ? 0.75 : d.life > 0.3 ? 0.5 : 0.25;
+      ctx.fillStyle = d.life > 0.5 ? light : dark;
+      ctx.fillRect(Math.round(x / PX) - r, Math.round(y / PX) - r, r * 2, r * 2);
     }
+    ctx.globalAlpha = 1;
+    ctx.restore();
   }
+}
+
+/** 跑道的土色：白天亮，傍晚、夜里沉下去。 */
+function dirtColor(P: Palette): string {
+  return mix("#b87c4c", P.ground, P.stars > 0.6 ? 0.6 : P.stars > 0.2 ? 0.38 : 0.18);
 }

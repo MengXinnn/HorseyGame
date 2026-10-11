@@ -1,4 +1,5 @@
-import { shade } from "../render/color";
+import { mix, shade } from "../render/color";
+import { drawCrowd } from "../render/crowd";
 import { lookFor, toScreen, type View } from "../render/horseArt";
 import { drawScene, PALETTES } from "../render/scene";
 import { STEP } from "../sim/race";
@@ -94,51 +95,65 @@ export class SumoView {
     const ppm = Math.min(W / (2 * R + 7), H * 0.13);
     const view: View = { camX: 0, ppm, groundY, width: W, anchor: 0.5 };
 
-    // 场地：远处的观众剪影。
-    ctx.fillStyle = shade(P.hills[3], -0.25);
-    for (let i = 0; i < 70; i++) {
-      const x = (i / 70) * W + ((i * 37) % 11);
-      const bob = Math.sin(this.wall * 4 + i) * (bout.started && !bout.finished ? 3 : 1);
-      const y = H * 0.6 + ((i * 13) % 9) - bob;
-      const r = 9 + (i % 3) * 3;
-      ctx.fillRect(x - r, y - r, r * 2, r * 2);
-      ctx.fillRect(x - r * 0.4, y - r * 1.7, r * 0.8, r * 0.8);
+    // 场地：四周一圈看台，坐满了人；前面一道矮木栏，地上是夯土。全按缓冲像素画。
+    const bw = Math.ceil(W / PX);
+    const bh = Math.ceil(H / PX);
+    const hz = Math.round((H * 0.6) / PX);
+    const rect = (x: number, y: number, w: number, h: number, c: string): void => {
+      ctx.fillStyle = c;
+      ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+    };
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    const live = bout.started && !bout.finished;
+    const heat = bout.finished ? 1 : live ? 0.35 + 0.3 * Math.abs(Math.sin(this.wall * 1.3)) : 0.1;
+    rect(0, hz - 34, bw, 34, mix("#4a3020", P.fog, 0.35));
+    drawCrowd(ctx, { x0: 0, x1: bw, base: hz - 1, rows: 5, offset: 0, time: this.wall, cheer: () => heat, seed: "擂台", haze: P.fog, hazeAmount: 0.25, seats: true, density: 0.9 });
+    rect(0, hz, bw, 4, "#7a4a24");
+    rect(0, hz, bw, 1, "#a8733f");
+    for (let x = 0; x < bw; x += 12) rect(x, hz, 1, 4, "#5a3218");
+    rect(0, hz + 4, bw, bh - hz - 4, shade(P.ground, 0.25));
+    for (let i = 0; i < bw * 0.6; i++) {
+      const h = (i * 2654435761) >>> 0;
+      rect(h % bw, hz + 5 + ((h >>> 12) % Math.max(1, bh - hz - 6)), 1, 1, shade(P.ground, (h >>> 8) % 2 ? 0.35 : 0.12));
     }
-    ctx.fillStyle = shade(P.ground, -0.1);
-    ctx.fillRect(0, H * 0.6, W, H * 0.4);
 
-    // 土俵：梯形台子，台面上一圈草绳。
-    const [lx] = toScreen(view, { x: -R - 1.4, y: 0 });
-    const [rx] = toScreen(view, { x: R + 1.4, y: 0 });
-    const depth = ppm * 0.9;
-    ctx.fillStyle = "#8a6a46";
-    ctx.beginPath();
-    ctx.moveTo(lx, groundY);
-    ctx.lineTo(rx, groundY);
-    ctx.lineTo(rx + depth * 0.6, groundY + depth);
-    ctx.lineTo(lx - depth * 0.6, groundY + depth);
-    ctx.fill();
-    ctx.fillStyle = "#d9c296";
-    ctx.beginPath();
-    ctx.ellipse((lx + rx) / 2, groundY, (rx - lx) / 2, ppm * 0.5, 0, Math.PI, 0);
-    ctx.fill();
-    ctx.fillRect(lx, groundY - 1, rx - lx, 3);
-    for (const sx of [-R, R]) {
-      const [x] = toScreen(view, { x: sx, y: 0 });
-      ctx.fillStyle = "#8f7a3c";
-      ctx.beginPath();
-      ctx.ellipse(x, groundY - ppm * 0.08, ppm * 0.22, ppm * 0.12, 0, 0, Math.PI * 2);
-      ctx.fill();
+    // 土俵：梯形的台子，正面看得见夯土的台壁；顶上一个椭圆的沙面，一圈草绳。
+    const [lxC] = toScreen(view, { x: -R - 1.4, y: 0 });
+    const [rxC] = toScreen(view, { x: R + 1.4, y: 0 });
+    const lx = lxC / PX;
+    const rx = rxC / PX;
+    const gy = Math.round(groundY / PX);
+    const depth = Math.round((ppm * 0.9) / PX);
+    for (let y = 0; y < depth; y++) {
+      const spread = y * 0.6;
+      const c = y < 2 ? "#c8a070" : y > depth - 3 ? "#5e4228" : "#8a6a46";
+      rect(lx - spread, gy + y, rx - lx + spread * 2, 1, c);
     }
-    ctx.strokeStyle = "#f5efe2";
-    ctx.lineWidth = Math.max(2, ppm * 0.06);
+    for (let x = Math.ceil(lx); x < rx; x += 7) rect(x, gy + 2, 1, depth - 4, "#76583a");
+    const cx = (lx + rx) / 2;
+    const rxE = (rx - lx) / 2;
+    const ryE = Math.max(3, Math.round((ppm * 0.5) / PX));
+    for (let dy = -ryE; dy <= 1; dy++) {
+      const w = Math.round(rxE * Math.sqrt(Math.max(0, 1 - (Math.min(0, dy) / ryE) ** 2)));
+      rect(cx - w, gy + dy, w * 2, 1, dy === -ryE ? "#efe0b8" : "#d9c296");
+    }
+    // 草绳圈：按角度一节一节地点出来。
+    const ringR = (R / (R + 1.4)) * rxE;
+    const ringRy = (R / (R + 1.4)) * ryE;
+    for (let k = 0; k < 120; k++) {
+      const a = (k / 120) * Math.PI;
+      const x = Math.round(cx + Math.cos(a + Math.PI) * ringR);
+      const y = Math.round(gy - Math.sin(a) * ringRy);
+      rect(x, y, 1, 1, k % 6 < 3 ? "#b89a58" : "#d8c080");
+    }
+    rect(cx - ringR, gy - 1, ringR * 2, 1, "#b89a58");
     for (const sx of [-0.7, 0.7]) {
       const [x] = toScreen(view, { x: sx, y: 0 });
-      ctx.beginPath();
-      ctx.moveTo(x, groundY - ppm * 0.15);
-      ctx.lineTo(x, groundY + ppm * 0.15);
-      ctx.stroke();
+      rect(Math.round(x / PX), gy - 2, 1, 4, "#f5efe2");
     }
+    ctx.restore();
 
     const poses = bout.poses();
     poses.forEach((pose, i) => {
