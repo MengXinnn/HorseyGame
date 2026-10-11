@@ -13,6 +13,7 @@
     "sim:stability": "vitest run --config vitest.stability.config.ts"
   },
   "dependencies": {
+    "@fontsource/fusion-pixel-12px-proportional-sc": "^5.3.0",
     "planck": "^1.5.0"
   },
   "devDependencies": {

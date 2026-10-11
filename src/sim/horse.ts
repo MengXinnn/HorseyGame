@@ -48,7 +48,17 @@ export interface HorsePose {
   stumbling: boolean;
   fallen: boolean;
   phase: number;
+  /** 沿朝向的速度（米/秒），朝左的马往左跑也是正的。 */
   speed: number;
+  /** 朝向：1 头朝右（+x），-1 头朝左（-x）。 */
+  facing: 1 | -1;
+}
+
+export interface HorseOptions {
+  /** 朝向：1 头朝右（默认），-1 整匹马镜像，头朝左。 */
+  facing?: 1 | -1;
+  /** 是否和别的马相撞（相扑用）；默认 false，比赛里每匹马各跑各的泳道。 */
+  collideHorses?: boolean;
 }
 
 interface Leg {
@@ -72,6 +82,10 @@ export type HorseState = "running" | "stalled" | "stumbling" | "fallen";
  */
 export class HorseSim {
   readonly plan: BodyPlan;
+  /** 朝向：1 头朝右，-1 头朝左。所有左右相关的量都乘以它，朝左的马就是朝右的马的镜像。 */
+  readonly facing: 1 | -1;
+  /** 出生时躯干的 x，用于计算沿朝向前进了多远。 */
+  readonly startX: number;
   readonly torso: Body;
   readonly neck: Body;
   private readonly legs: Leg[] = [];
@@ -103,40 +117,46 @@ export class HorseSim {
   /** 前腿、后腿的落脚前移量（弧度），由落脚反射慢慢调出来。 */
   private reachFront = 0.05;
   private reachRear = -0.05;
+  /** 目标速度（米/秒）；为 null 时用身体的极速。野马群溜达、相扑顶牛都靠它压低速度。 */
+  targetSpeed: number | null = null;
 
-  constructor(world: World, plan: BodyPlan, x: number, group: number, rng: Rng) {
+  constructor(world: World, plan: BodyPlan, x: number, group: number, rng: Rng, opts: HorseOptions = {}) {
     this.world = world;
     this.plan = plan;
     this.rng = rng;
     this.stamina = plan.stamina;
+    const s = (this.facing = opts.facing ?? 1);
+    this.startX = x;
 
-    const filter = { filterGroupIndex: -group, filterCategoryBits: CATEGORY_HORSE, filterMaskBits: CATEGORY_GROUND };
+    // 自己的零件同属一个负组，永远互不相撞；开了 collideHorses 才和别的马撞。
+    const mask = opts.collideHorses ? CATEGORY_GROUND | CATEGORY_HORSE : CATEGORY_GROUND;
+    const filter = { filterGroupIndex: -group, filterCategoryBits: CATEGORY_HORSE, filterMaskBits: mask };
     const L = plan.torsoLength;
     const H = plan.torsoHeight;
     const legTop = Math.max(plan.legFront, plan.legRear);
     const torsoY = legTop + H * 0.3;
-    this.restAngle = Math.atan2(plan.legFront - plan.legRear, L * 0.68);
+    this.restAngle = s * Math.atan2(plan.legFront - plan.legRear, L * 0.68);
     this.standHeight = (plan.legFront + plan.legRear) / 2 + H * 0.3 - 0.06;
 
     this.torso = world.createBody({ type: "dynamic", position: new Vec2(x, torsoY), angularDamping: 0.6 });
     this.torso.createFixture(new Box(L / 2, H / 2), { density: plan.torsoMass / (L * H), friction: BODY_FRICTION, ...filter });
 
     // 颈和头合成一个刚体，用一个硬马达关节连在肩上，跑起来会自然点头。
-    const neckRoot = new Vec2(x + L * 0.4, torsoY + H * 0.3);
+    const neckRoot = new Vec2(x + s * L * 0.4, torsoY + H * 0.3);
     this.neck = world.createBody({ type: "dynamic", position: neckRoot, angularDamping: 2 });
     const nl = plan.neckLength;
     const neckAngle = 0.95;
     const neckW = H * 0.32;
-    const neckCenter = new Vec2(Math.cos(neckAngle) * nl * 0.5, Math.sin(neckAngle) * nl * 0.5);
-    const headCenter = new Vec2(Math.cos(neckAngle) * nl + plan.headLength * 0.32, Math.sin(neckAngle) * nl - plan.headLength * 0.1);
+    const neckCenter = new Vec2(s * Math.cos(neckAngle) * nl * 0.5, Math.sin(neckAngle) * nl * 0.5);
+    const headCenter = new Vec2(s * (Math.cos(neckAngle) * nl + plan.headLength * 0.32), Math.sin(neckAngle) * nl - plan.headLength * 0.1);
     const neckArea = nl * neckW;
     const headArea = plan.headLength * plan.headLength * 0.45;
     const density = plan.headMass / (neckArea + headArea);
-    this.neck.createFixture(new Box(nl / 2, neckW / 2, neckCenter, neckAngle), { density, friction: BODY_FRICTION, ...filter });
-    this.neck.createFixture(new Box(plan.headLength / 2, plan.headLength * 0.225, headCenter, -0.6), { density, friction: BODY_FRICTION, ...filter });
+    this.neck.createFixture(new Box(nl / 2, neckW / 2, neckCenter, s * neckAngle), { density, friction: BODY_FRICTION, ...filter });
+    this.neck.createFixture(new Box(plan.headLength / 2, plan.headLength * 0.225, headCenter, s * -0.6), { density, friction: BODY_FRICTION, ...filter });
     this.neckJoint = world.createJoint(
       new RevoluteJoint(
-        { enableMotor: true, maxMotorTorque: plan.hipTorque * 0.8, enableLimit: true, lowerAngle: -0.35, upperAngle: 0.3 },
+        { enableMotor: true, maxMotorTorque: plan.hipTorque * 0.8, enableLimit: true, ...this.mirrorLimits(-0.35, 0.3) },
         this.torso,
         this.neck,
         neckRoot,
@@ -150,11 +170,11 @@ export class HorseSim {
       { front: true, far: true, offset: Math.PI },
       { front: false, far: false, offset: Math.PI },
     ];
-    for (const s of specs) {
-      const len = s.front ? plan.legFront : plan.legRear;
+    for (const spec of specs) {
+      const len = spec.front ? plan.legFront : plan.legRear;
       const upper = len * 0.5;
       const lower = len - upper;
-      const hx = x + (s.front ? L * 0.34 : -L * 0.34);
+      const hx = x + s * (spec.front ? L * 0.34 : -L * 0.34);
       const hy = torsoY - H * 0.3;
       const w = plan.legWidth;
       const legDensity = plan.legMass / (w * len * 0.5);
@@ -167,7 +187,7 @@ export class HorseSim {
 
       const hip = world.createJoint(
         new RevoluteJoint(
-          { enableMotor: true, maxMotorTorque: plan.hipTorque, enableLimit: true, lowerAngle: -1.1, upperAngle: 1.1 },
+          { enableMotor: true, maxMotorTorque: plan.hipTorque, enableLimit: true, ...this.mirrorLimits(-1.1, 1.1) },
           this.torso,
           thigh,
           new Vec2(hx, hy),
@@ -175,18 +195,33 @@ export class HorseSim {
       ) as RevoluteJoint;
       const knee = world.createJoint(
         new RevoluteJoint(
-          { enableMotor: true, maxMotorTorque: plan.kneeTorque, enableLimit: true, lowerAngle: s.front ? -1.7 : -0.15, upperAngle: s.front ? 0.15 : 1.7 },
+          { enableMotor: true, maxMotorTorque: plan.kneeTorque, enableLimit: true, ...this.mirrorLimits(spec.front ? -1.7 : -0.15, spec.front ? 0.15 : 1.7) },
           thigh,
           shin,
           new Vec2(hx, hy - upper),
         ),
       ) as RevoluteJoint;
-      this.legs.push({ thigh, shin, hip, knee, phaseOffset: s.offset, front: s.front, far: s.far, upper, lower, grounded: false });
+      this.legs.push({ thigh, shin, hip, knee, phaseOffset: spec.offset, front: spec.front, far: spec.far, upper, lower, grounded: false });
     }
   }
 
   get x(): number {
     return this.torso.getPosition().x;
+  }
+
+  /** 沿朝向前进了多远（米）：朝左的马往左走是正的。 */
+  get progress(): number {
+    return this.facing * (this.x - this.startX);
+  }
+
+  /** 镜像关节限位：角度取反，上下限对调。 */
+  private mirrorLimits(lo: number, hi: number): { lowerAngle: number; upperAngle: number } {
+    return this.facing > 0 ? { lowerAngle: lo, upperAngle: hi } : { lowerAngle: -hi, upperAngle: -lo };
+  }
+
+  private setLimits(joint: RevoluteJoint, lo: number, hi: number): void {
+    const m = this.mirrorLimits(lo, hi);
+    joint.setLimits(m.lowerAngle, m.upperAngle);
   }
 
   get bodies(): Body[] {
@@ -196,6 +231,7 @@ export class HorseSim {
   step(dt: number): void {
     this.time += dt;
     const p = this.plan;
+    const s = this.facing;
     const angle = this.torso.getAngle();
     const tilt = Math.atan2(Math.sin(angle), Math.cos(angle));
 
@@ -212,13 +248,13 @@ export class HorseSim {
 
     // 跑得越快越容易绊跤；绊跤时身体往前一扑，平衡差的马就真的摔个嘴啃泥。
     if (this.active && this.state === "running") {
-      const pace = Math.max(0, Math.min(1, this.torso.getLinearVelocity().x / p.topSpeed));
+      const pace = Math.max(0, Math.min(1, (s * this.torso.getLinearVelocity().x) / p.topSpeed));
       if (this.rng.chance(p.stumblePerSecond * pace * pace * dt)) {
         this.state = "stumbling";
         this.stumbles++;
         this.stumbleLeft = 0.6 + this.rng.next() * 0.3;
         const spin = p.stumbleSpin * (0.7 + this.rng.next() * 0.6);
-        this.torso.setAngularVelocity(this.torso.getAngularVelocity() - spin);
+        this.torso.setAngularVelocity(this.torso.getAngularVelocity() - s * spin);
       }
     }
     if (this.state === "stumbling") {
@@ -242,7 +278,7 @@ export class HorseSim {
     const effort = running ? (tired ? 0.55 : 1) : 0;
     if (running) {
       // 步频跟着实际速度走：蹄子在地上向后扫的速度 ≈ 身体前进的速度，腿不会变成刹车。
-      const vx = Math.max(0, this.torso.getLinearVelocity().x);
+      const vx = Math.max(0, s * this.torso.getLinearVelocity().x);
       const legAvg = (p.legFront + p.legRear) / 2;
       const cadence = Math.max(p.gaitHz * 0.7, (vx + 1.2) / (4 * p.hipAmplitude * legAvg * 0.95));
       this.phase += 2 * Math.PI * Math.min(cadence, 6) * dt;
@@ -257,7 +293,7 @@ export class HorseSim {
       for (const l of this.legs) {
         const hip = l.hip.getAnchorA();
         const foot = l.shin.getWorldPoint(new Vec2(0, -l.lower / 2));
-        const slant = Math.atan2(foot.x - hip.x, hip.y - foot.y) / 2;
+        const slant = Math.atan2(s * (foot.x - hip.x), hip.y - foot.y) / 2;
         if (l.front) front += slant;
         else rear += slant;
       }
@@ -276,14 +312,14 @@ export class HorseSim {
       // 支撑相锁膝（马腿的「悬挂装置」）：膝盖只能伸直、不能被压弯，否则快跑时前腿会折。
       const k = leg.knee.getJointAngle();
       if (lift < 0.05 && effort > 0) {
-        if (leg.front) leg.knee.setLimits(Math.min(-0.08, k), 0.15);
-        else leg.knee.setLimits(-0.15, Math.max(0.08, k));
-      } else if (leg.front) leg.knee.setLimits(-1.7, 0.15);
-      else leg.knee.setLimits(-0.15, 1.7);
-      drive(leg.hip, hipTarget, HIP_GAIN);
-      drive(leg.knee, kneeTarget, KNEE_GAIN);
+        if (leg.front) this.setLimits(leg.knee, Math.min(-0.08, s * k), 0.15);
+        else this.setLimits(leg.knee, -0.15, Math.max(0.08, s * k));
+      } else if (leg.front) this.setLimits(leg.knee, -1.7, 0.15);
+      else this.setLimits(leg.knee, -0.15, 1.7);
+      drive(leg.hip, s * hipTarget, HIP_GAIN);
+      drive(leg.knee, s * kneeTarget, KNEE_GAIN);
     }
-    drive(this.neckJoint, running ? 0.06 * Math.sin(this.phase * 2) : this.state === "stalled" ? -0.3 : 0, 6);
+    drive(this.neckJoint, s * (running ? 0.06 * Math.sin(this.phase * 2) : this.state === "stalled" ? -0.3 : 0), 6);
 
     // 着地推进：着地的蹄子越多，地面给的推力越大；推力作用在地面高度，
     // 所以腿越长、重心越高的马越容易被自己的冲劲掀得前蹄离地甚至后翻。
@@ -295,8 +331,8 @@ export class HorseSim {
         const gap = foot.y - p.hoofRadius;
         reach += l.grounded ? 1 : Math.max(0, 1 - gap / REACH);
       }
-      const vx = this.torso.getLinearVelocity().x;
-      const target = p.topSpeed * (tired ? 0.72 : 1);
+      const vx = s * this.torso.getLinearVelocity().x;
+      const target = (this.targetSpeed ?? p.topSpeed) * (tired ? 0.72 : 1);
       const want = Math.max(-0.3, Math.min(1, (target - vx) / 1.5));
       const grip = Math.min(1, p.hoofFriction * this.groundFriction);
       // 腾空的瞬间不会立刻失去推力：用一个短暂的「着地记忆」平滑。
@@ -304,7 +340,7 @@ export class HorseSim {
       const force = p.totalMass * p.acceleration * want * this.contact * grip;
       if (force !== 0) {
         const at = this.torso.getWorldPoint(new Vec2(0, 0));
-        this.torso.applyForce(new Vec2(force, 0), new Vec2(at.x, Math.max(0, at.y - p.pushHeight)), true);
+        this.torso.applyForce(new Vec2(s * force, 0), new Vec2(at.x, Math.max(0, at.y - p.pushHeight)), true);
       }
     }
 
@@ -337,7 +373,7 @@ export class HorseSim {
     for (const l of this.legs) {
       l.hip.setMaxMotorTorque(this.plan.hipTorque * FALLEN_GRIP);
       l.knee.setMaxMotorTorque(this.plan.kneeTorque * FALLEN_GRIP);
-      l.knee.setLimits(l.front ? -1.7 : -0.15, l.front ? 0.15 : 1.7);
+      this.setLimits(l.knee, l.front ? -1.7 : -0.15, l.front ? 0.15 : 1.7);
     }
     this.neckJoint.setMaxMotorTorque(this.plan.hipTorque * FALLEN_GRIP);
     // 倒在地上会被地面磨停，不会一路滑出去。
@@ -360,7 +396,8 @@ export class HorseSim {
       stumbling: this.state === "stumbling",
       fallen: this.state === "fallen",
       phase: this.phase,
-      speed: this.torso.getLinearVelocity().x,
+      speed: this.facing * this.torso.getLinearVelocity().x,
+      facing: this.facing,
     };
   }
 

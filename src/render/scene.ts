@@ -1,4 +1,4 @@
-import { rgba, shade } from "./color";
+import { mix, rgba, shade } from "./color";
 
 /** 山水剪影：一天四个时段，每个时段一套天空、远山、雾和边缘光颜色。 */
 export type TimeOfDay = "dawn" | "noon" | "dusk" | "night";
@@ -21,6 +21,52 @@ export const PALETTES: Record<TimeOfDay, Palette> = {
   dusk: { sky: ["#2a2154", "#9b4e78", "#f19763", "#f8d27f"], sun: "#ffe3a3", sunY: 0.66, hills: ["#b0607a", "#7f4673", "#563562", "#33244a"], fog: "#f2a07a", ground: "#2a1f3d", grass: "#3a2b4f", rim: "#ffc98a", stars: 0.25 },
   night: { sky: ["#070b22", "#141c46", "#2b3466"], sun: "#f3efe0", sunY: 0.2, hills: ["#2c3768", "#222b57", "#182046", "#0f1534"], fog: "#3a4680", ground: "#0c1129", grass: "#141a3a", rim: "#b9c7ff", stars: 1 },
 };
+
+function sampleSky(sky: string[], t: number): string {
+  const f = t * (sky.length - 1);
+  const i = Math.min(sky.length - 2, Math.floor(f));
+  return mix(sky[i] as string, sky[i + 1] as string, f - i);
+}
+
+function lerpPalette(a: Palette, b: Palette, t: number): Palette {
+  const n = (x: number, y: number): number => x + (y - x) * t;
+  return {
+    sky: [0, 1 / 3, 2 / 3, 1].map((k) => mix(sampleSky(a.sky, k), sampleSky(b.sky, k), t)),
+    sun: mix(a.sun, b.sun, t),
+    sunY: n(a.sunY, b.sunY),
+    hills: a.hills.map((c, i) => mix(c, b.hills[i] as string, t)) as Palette["hills"],
+    fog: mix(a.fog, b.fog, t),
+    ground: mix(a.ground, b.ground, t),
+    grass: mix(a.grass, b.grass, t),
+    rim: mix(a.rim, b.rim, t),
+    stars: n(a.stars, b.stars),
+  };
+}
+
+/** 一天里的关键时刻（分钟）和对应的天色，中间平滑过渡。 */
+const KEYS: Array<[number, TimeOfDay]> = [
+  [5 * 60, "night"],
+  [7 * 60, "dawn"],
+  [10 * 60, "noon"],
+  [15 * 60, "noon"],
+  [18 * 60, "dusk"],
+  [20 * 60, "night"],
+];
+
+/** 按时钟（分钟）混合出当前的天色。 */
+export function paletteAt(clock: number): Palette {
+  const c = Math.max(KEYS[0]![0], Math.min(KEYS[KEYS.length - 1]![0], clock));
+  for (let i = 0; i < KEYS.length - 1; i++) {
+    const [t0, a] = KEYS[i]!;
+    const [t1, b] = KEYS[i + 1]!;
+    if (c <= t1) {
+      const t = (c - t0) / (t1 - t0);
+      const smooth = t * t * (3 - 2 * t);
+      return lerpPalette(PALETTES[a], PALETTES[b], smooth);
+    }
+  }
+  return PALETTES.night;
+}
 
 export const TIME_LABELS: Record<TimeOfDay, string> = { dawn: "清晨", noon: "正午", dusk: "黄昏", night: "夜晚" };
 
@@ -45,8 +91,9 @@ export interface SceneInfo {
  * 画背景。scroll 是镜头的横向位置（像素），远山按视差系数移动。
  * groundRatio 决定地平线在画面中的高度。
  */
-export function drawScene(ctx: CanvasRenderingContext2D, W: number, H: number, time: TimeOfDay, scroll: number, t: number, groundRatio = 0.8): SceneInfo {
-  const T = PALETTES[time];
+export function drawScene(ctx: CanvasRenderingContext2D, W: number, H: number, time: TimeOfDay | Palette, scroll: number, t: number, groundRatio = 0.8): SceneInfo {
+  const T = typeof time === "string" ? PALETTES[time] : time;
+  const night = T.stars > 0.6;
   const sky = ctx.createLinearGradient(0, 0, 0, H * groundRatio);
   T.sky.forEach((c, i) => sky.addColorStop(i / (T.sky.length - 1), c));
   ctx.fillStyle = sky;
@@ -65,7 +112,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, W: number, H: number, t
 
   const sx = W * 0.72;
   const sy = H * T.sunY;
-  const sr = Math.min(W, H) * (time === "night" ? 0.045 : 0.07);
+  const sr = Math.min(W, H) * (night ? 0.045 : 0.07);
   const halo = ctx.createRadialGradient(sx, sy, sr * 0.5, sx, sy, sr * 7);
   halo.addColorStop(0, rgba(T.sun, 0.58));
   halo.addColorStop(1, rgba(T.sun, 0));
@@ -75,7 +122,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, W: number, H: number, t
   ctx.beginPath();
   ctx.arc(sx, sy, sr, 0, Math.PI * 2);
   ctx.fill();
-  if (time === "night") {
+  if (night) {
     ctx.fillStyle = T.sky[1] as string;
     ctx.beginPath();
     ctx.arc(sx + sr * 0.42, sy - sr * 0.2, sr * 0.9, 0, Math.PI * 2);
