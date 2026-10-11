@@ -6,9 +6,31 @@ import type { TimeOfDay } from "../render/scene";
 
 export const DAY_START = 6 * 60;
 export const EVENT_TIME = 17 * 60;
+/** 比赛散场的钟点。 */
+export const AFTER_EVENT = 19 * 60;
 export const MIDNIGHT = 24 * 60;
-/** 现实 1 秒 = 游戏里几分钟。 */
-export const MINUTES_PER_SECOND = 3;
+
+/**
+ * 时间不会自己走：做一件事才花一段时间（分钟）。逛、看马、翻马厩、聊天都不花时间。
+ * 每件改变局面的事至少花十分钟；走到另一片地方花一刻钟——在一片地方里随便逛不花，
+ * 跑远路日子才慢慢往前挪。想快进就歇一会儿，或者直接等到傍晚开赛。
+ */
+export const TIME_COST = {
+  /** 走到另一片地方（牧场、镇上、野原……）。 */
+  travel: 15,
+  /** 扔一次套索。 */
+  throwLasso: 10,
+  /** 套中以后把马牵回去。 */
+  catch: 30,
+  mate: 60,
+  sequence: 20,
+  sell: 20,
+  import: 20,
+  register: 10,
+  bet: 10,
+  trial: 30,
+  rest: 60,
+} as const;
 
 export const START_MONEY = 300;
 export const LASSOS_PER_DAY = 3;
@@ -52,6 +74,15 @@ export function phaseOf(clock: number): TimeOfDay {
   if (clock < 16 * 60) return "noon";
   if (clock < 19 * 60) return "dusk";
   return "night";
+}
+
+/** 一段时间怎么写：15分、1小时、1小时30分。 */
+export function formatSpan(minutes: number): string {
+  const total = Math.round(minutes);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  if (!h) return `${m}分`;
+  return m ? `${h}小时${m}分` : `${h}小时`;
 }
 
 export function formatClock(clock: number): string {

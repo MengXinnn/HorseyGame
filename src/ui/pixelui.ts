@@ -106,7 +106,7 @@ export function installPixelUI(): void {
   };
   const root = document.documentElement.style;
   for (const [k, url] of Object.entries(frames)) root.setProperty(`--f-${k}`, `url(${url})`);
-  const icons: IconId[] = ["rope", "horse", "coin", "sun", "moon", "flag", "ring", "crown", "star", "close", "heart", "dna", "scroll", "shoe", "menu", "ticket", "tag", "bag"];
+  const icons: IconId[] = ["rope", "horse", "coin", "sun", "moon", "flag", "ring", "crown", "star", "close", "heart", "dna", "scroll", "shoe", "menu", "ticket", "tag", "bag", "clock"];
   for (const id of icons) root.setProperty(`--i-${id}`, `url(${iconURL(id)})`);
 }
 

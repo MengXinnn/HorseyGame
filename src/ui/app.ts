@@ -8,6 +8,7 @@ import { hashSeed } from "../sim/rng";
 import { SumoBout } from "../sim/sumo";
 import { laozhaoLines, LETTER } from "../game/laozhao";
 import {
+  AFTER_EVENT,
   betLimit,
   betPayout,
   daysUntilDebt,
@@ -17,15 +18,19 @@ import {
   EVENT_TIME,
   eventFor,
   formatClock,
+  formatSpan,
   MIDNIGHT,
   RACE_DISTANCE,
   SEQUENCING_FEE,
+  TIME_COST,
   weekOf,
   type EventKind,
 } from "../game/season";
 import {
   applyOutcome,
+  eventPending,
   findHorse,
+  hasTime,
   importHorse,
   isFoal,
   loadGame,
@@ -33,14 +38,17 @@ import {
   placeBet,
   register,
   resetGame,
+  rest,
   saveGame,
   sellHorse,
   sellPrice,
   sendToSequencing,
   sleep,
   STABLE_LIMIT,
+  startTrial,
   todaysField,
   todaysOdds,
+  waitForEvent,
   type EventOutcome,
   type GameState,
   type NightReport,
@@ -56,10 +64,6 @@ import { Stage } from "./stage";
 import { SumoView } from "./sumoView";
 
 const TRIAL_SECONDS = 10;
-/** 试跑一次花掉的游戏时间（分钟）。 */
-const TRIAL_MINUTES = 20;
-/** 赛后回到世界时的钟点。 */
-const AFTER_EVENT = 19 * 60;
 const RACE_TIME_LIMIT = 120;
 
 const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
@@ -79,6 +83,9 @@ const cn = (n: number): string => {
 };
 
 const money = (n: number): string => `<span class="coin-num">${ico("coin")}${n.toLocaleString("zh-CN")}</span>`;
+
+/** 做这件事要花的时间，挂在按钮上。 */
+const cost = (minutes: number): string => `<span class="cost" title="要花${formatSpan(minutes)}">${ico("clock")}${formatSpan(minutes)}</span>`;
 
 /** 钱袋里一格一个数字，前面空格补齐。 */
 const goldCells = (n: number): string => {
@@ -122,14 +129,14 @@ export function startApp(root: HTMLElement): void {
           <span class="mm-name" id="mm-name" hidden></span>
         </button>
         <div class="clockbox">
-          <div class="cb-main">
+          <button class="cb-main" id="h-clockbtn" title="歇一会儿">
             <canvas class="cb-dial" id="h-dial" width="20" height="34"></canvas>
-            <div class="cb-info">
-              <div class="cb-date" id="h-day"></div>
-              <div class="cb-event" id="h-event"></div>
-              <div class="cb-time" id="h-clock"></div>
-            </div>
-          </div>
+            <span class="cb-info">
+              <span class="cb-date" id="h-day"></span>
+              <span class="cb-event" id="h-event"></span>
+              <span class="cb-time" id="h-clock"></span>
+            </span>
+          </button>
           <div class="cb-gold" id="h-money" title="钱"></div>
         </div>
         <div class="debt-note" id="h-debt"></div>
@@ -199,11 +206,25 @@ export function startApp(root: HTMLElement): void {
 
   /* ---------------- HUD ---------------- */
 
+  /** 钟面：显示画面上的钟（做完事时间一下子跳过去，钟面跟着转过去）。 */
+  const drawClock = (): void => {
+    $("#h-clock").textContent = formatClock(world.clock);
+    drawDial($<HTMLCanvasElement>("#h-dial"), (world.clock - 360) / (MIDNIGHT - 360));
+  };
+  const clockLoop = (): void => {
+    if (!world.settled) drawClock();
+    requestAnimationFrame(clockLoop);
+  };
+  requestAnimationFrame(clockLoop);
+
+  /** 上回 HUD 看到的钟点：钟往前走了，就在钟旁边冒一个「+30分」。 */
+  let seenClock = { day: game.day, clock: game.clock };
   const hud = (): void => {
     const kind = eventFor(game.day);
     $("#h-day").textContent = `第${cn(game.day)}天`;
-    $("#h-clock").textContent = formatClock(game.clock);
-    drawDial($<HTMLCanvasElement>("#h-dial"), (game.clock - 360) / (MIDNIGHT - 360));
+    drawClock();
+    if (seenClock.day === game.day && game.clock > seenClock.clock + 0.5) floatTime(game.clock - seenClock.clock);
+    seenClock = { day: game.day, clock: game.clock };
     const done = !!game.flags[`ev:${game.day}`];
     const entered = game.entry?.day === game.day;
     const bet = game.bet?.day === game.day;
@@ -226,6 +247,54 @@ export function startApp(root: HTMLElement): void {
     mmName.hidden = !place;
     toolbar();
   };
+
+  /** 钟旁边冒出来的「+30分」，往上飘一下就没了。 */
+  const floatTime = (minutes: number): void => {
+    const el = document.createElement("span");
+    el.className = "cb-plus";
+    el.textContent = `+${formatSpan(minutes)}`;
+    $(".clockbox").appendChild(el);
+    window.setTimeout(() => el.remove(), 1400);
+  };
+
+  /** 点钟表：歇一会儿，或者一直等到傍晚开赛。 */
+  const openRest = (): void => {
+    const canRest = hasTime(game, TIME_COST.rest);
+    const pending = eventPending(game);
+    panel(
+      "歇脚",
+      `<div class="rest">
+        <div class="rest-clock">${ico(game.clock < 19 * 60 ? "sun" : "moon")}<b>${formatClock(game.clock)}</b></div>
+        <div class="row center">
+          <button class="btn wood big" data-act="rest" ${canRest ? "" : "disabled"}>歇一会儿 ${cost(TIME_COST.rest)}</button>
+          ${pending ? `<button class="btn big" data-act="wait" title="${EVENT_LABELS[eventFor(game.day)]}　傍晚五点开赛">等开赛 ${cost(EVENT_TIME - game.clock)}</button>` : ""}
+        </div>
+      </div>`,
+      {
+        rest: () => {
+          const res = rest(game);
+          if (!res.ok) return toast(res.reason);
+          persist();
+          closePanel();
+        },
+        wait: () => waitTillEvent(),
+      },
+      { cls: "narrow" },
+    );
+  };
+
+  /** 一直等到开赛：关掉面板，钟跳到五点，天色转过去以后弹出开赛。 */
+  const waitTillEvent = (): void => {
+    const res = waitForEvent(game);
+    if (!res.ok) return toast(res.reason);
+    persist();
+    onPanelClose = null;
+    closePanel();
+  };
+
+  $("#h-clockbtn").addEventListener("click", () => {
+    if (mode === "world" && talkEl.hidden && veil.hidden) openRest();
+  });
 
   /** 底部工具栏：套索、名望、马厩里的马、马厩和菜单。 */
   const TOOLBAR_HORSES = 6;
@@ -507,7 +576,7 @@ export function startApp(root: HTMLElement): void {
       `<div class="breed">
         ${slot(0)}<span class="heart">♥</span>${slot(1)}
       </div>
-      <div class="row center"><button class="btn big" data-act="mate" ${breedPick.length < 2 || full ? "disabled" : ""}>配种</button></div>
+      <div class="row center"><button class="btn big" data-act="mate" ${breedPick.length < 2 || full ? "disabled" : ""}>配种 ${cost(TIME_COST.mate)}</button></div>
       ${full ? `<p class="warn-line">马厩满了</p>` : ""}
       <div class="roster compact">${game.horses
         .filter((h) => !breedPick.includes(h.id))
@@ -541,7 +610,7 @@ export function startApp(root: HTMLElement): void {
   const openSequencing = (): void => {
     panel(
       "测序",
-      `<div class="price-head">${money(SEQUENCING_FEE)}<small>一匹</small><small>明早出结果</small></div>
+      `<div class="price-head">${money(SEQUENCING_FEE)}<small>一匹</small>${cost(TIME_COST.sequence)}<small>明早出结果</small></div>
        <div class="roster">${game.horses
          .map((h) =>
            card(h, {
@@ -574,7 +643,7 @@ export function startApp(root: HTMLElement): void {
         .join("")}</div>
        <div class="row center">${
          selling && findHorse(game, selling)
-           ? `<button class="btn big" data-act="confirm">卖掉${esc(findHorse(game, selling)!.name)}</button>`
+           ? `<button class="btn big" data-act="confirm">卖掉${esc(findHorse(game, selling)!.name)} ${cost(TIME_COST.sell)}</button>`
            : `<span class="hint-line">选一匹马</span>`
        }</div>`,
       {
@@ -604,7 +673,7 @@ export function startApp(root: HTMLElement): void {
       "马码",
       `<div class="board">
         <input id="code-in" class="code-in" autocomplete="off" spellcheck="false" placeholder="TM2-" />
-        <button class="btn" data-act="import">牵进来</button>
+        <button class="btn" data-act="import">牵进来 ${cost(TIME_COST.import)}</button>
       </div>`,
       {
         import: () => {
@@ -612,6 +681,7 @@ export function startApp(root: HTMLElement): void {
           const res = importHorse(game, input?.value ?? "");
           if (res === "full") return toast("马厩满了");
           if (res === "invalid") return toast("马码不对");
+          if (res === "late") return toast("太晚了，明天再说");
           persist();
           world.sync();
           closePanel();
@@ -655,8 +725,9 @@ export function startApp(root: HTMLElement): void {
        ${status}
        <div class="roster compact">${ready.map((h) => card(h, { act: "pick", on: regPick === h.id })).join("")}</div>
        <div class="row center">
-         ${venue === "race" ? `<button class="btn wood big" data-act="trial" ${regPick ? "" : "disabled"} title="单独跑 ${TRIAL_SECONDS} 秒，看看能跑多远">试跑</button>` : ""}
-         ${canEnter && !entered ? `<button class="btn big" data-act="enter" ${regPick ? "" : "disabled"}>报名 ${money(ENTRY_FEE)}</button>` : ""}
+         ${venue === "race" ? `<button class="btn wood big" data-act="trial" ${regPick ? "" : "disabled"} title="单独跑 ${TRIAL_SECONDS} 秒，看看能跑多远">试跑 ${cost(TIME_COST.trial)}</button>` : ""}
+         ${canEnter && !entered ? `<button class="btn big" data-act="enter" ${regPick ? "" : "disabled"}>报名 ${money(ENTRY_FEE)} ${cost(TIME_COST.register)}</button>` : ""}
+         ${entered && today === venue && eventPending(game) ? `<button class="btn big" data-act="wait">等开赛 ${cost(EVENT_TIME - game.clock)}</button>` : ""}
        </div>`,
       {
         pick: (id) => {
@@ -671,14 +742,15 @@ export function startApp(root: HTMLElement): void {
           toast("报上名了，傍晚五点开赛");
           openRegister(venue);
         },
+        wait: () => waitTillEvent(),
         trial: () => {
           if (!regPick) return;
-          if (game.clock + TRIAL_MINUTES >= MIDNIGHT) return toast("太晚了");
           const h = findHorse(game, regPick);
-          if (h) {
-            closePanel();
-            runTrial(h);
-          }
+          if (!h) return;
+          const res = startTrial(game, h.id);
+          if (!res.ok) return toast(res.reason);
+          closePanel();
+          runTrial(h);
         },
       },
       { cls: "wide" },
@@ -690,7 +762,7 @@ export function startApp(root: HTMLElement): void {
   let stake = 50;
   let insured = false;
   const openBookie = (): void => {
-    if (game.flags[`ev:${game.day}`] || game.clock >= EVENT_TIME) return toast("收摊了，明天请早");
+    if (!eventPending(game)) return toast("收摊了，明天请早");
     const field = todaysField(game);
     const odds = todaysOdds(game);
     const limit = Math.min(betLimit(game.reputation), game.money);
@@ -712,7 +784,8 @@ export function startApp(root: HTMLElement): void {
       })
       .join("")}</div>`;
     const ticket = placed
-      ? `<div class="ticket"><span>${esc(field.find((f) => f.id === placed.horseId)?.name ?? "")}</span><b>${money(placed.amount)}</b><span>${placed.odds.toFixed(1)}倍</span>${placed.insured ? `<span class="mini-seal">保</span>` : ""}</div>`
+      ? `<div class="ticket"><span>${esc(field.find((f) => f.id === placed.horseId)?.name ?? "")}</span><b>${money(placed.amount)}</b><span>${placed.odds.toFixed(1)}倍</span>${placed.insured ? `<span class="mini-seal">保</span>` : ""}</div>
+         <div class="row center"><button class="btn big" data-act="wait">等开赛 ${cost(EVENT_TIME - game.clock)}</button></div>`
       : `<div class="stake">
           ${[10, 50, 100, limit]
             .filter((v, i, a) => v >= 10 && v <= limit && a.indexOf(v) === i)
@@ -722,7 +795,7 @@ export function startApp(root: HTMLElement): void {
         </div>
         <div class="row center">
           <span class="payout" title="赢了能拿回">${money(betPayout(stake, pickOdds, true, insured))}</span>
-          <button class="btn big" data-act="bet" ${limit < 10 ? "disabled" : ""}>押 ${money(stake)}</button>
+          <button class="btn big" data-act="bet" ${limit < 10 ? "disabled" : ""}>押 ${money(stake)} ${cost(TIME_COST.bet)}</button>
         </div>`;
     panel(
       `${EVENT_LABELS[eventFor(game.day)]}赔率`,
@@ -740,6 +813,7 @@ export function startApp(root: HTMLElement): void {
           insured = !insured;
           openBookie();
         },
+        wait: () => waitTillEvent(),
         bet: () => {
           if (!betPick) return;
           const res = placeBet(game, betPick, stake, insured);
@@ -771,13 +845,13 @@ export function startApp(root: HTMLElement): void {
   /* ---------------- 睡觉和夜晚结算 ---------------- */
 
   const askSleep = (): void => {
-    const pending = !game.flags[`ev:${game.day}`] && game.clock < EVENT_TIME && (game.entry?.day === game.day || game.bet?.day === game.day);
+    const pending = eventPending(game) && (game.entry?.day === game.day || game.bet?.day === game.day);
     if (!pending) return goToSleep();
     panel(
       "睡觉",
       `<p class="say">今天的${EVENT_LABELS[eventFor(game.day)]}还没开赛。</p>
-       <div class="row center"><button class="btn wood big" data-act="close">再等等</button><button class="btn big" data-act="sleep">睡</button></div>`,
-      { sleep: () => goToSleep() },
+       <div class="row center"><button class="btn wood big" data-act="wait">等开赛 ${cost(EVENT_TIME - game.clock)}</button><button class="btn big" data-act="sleep">睡</button></div>`,
+      { sleep: () => goToSleep(), wait: () => waitTillEvent() },
       { cls: "narrow" },
     );
   };
@@ -901,8 +975,8 @@ export function startApp(root: HTMLElement): void {
     hud();
   };
 
+  /** 试跑：时间在点「试跑」的时候已经花掉了。 */
   const runTrial = (h: StableHorse): void => {
-    game.clock += TRIAL_MINUTES;
     const seed = hashSeed(`trial:${h.id}:${h.record.trials}`);
     const race = new Race([{ id: h.id, name: h.name, genome: h.genome }], { distance: 10_000, seed, timeLimit: TRIAL_SECONDS });
     enterEventView(raceCanvas);
@@ -926,10 +1000,11 @@ export function startApp(root: HTMLElement): void {
             <p>${parts(`${((res.distance / TRIAL_SECONDS) * 3.6).toFixed(0)}公里/时`, res.falls > 0 && `<span class="tag red">摔倒</span>`, res.stalls > 0 && `<span class="tag">发呆</span>`)}</p>
             ${res.distance > prev && prev > 0 ? `<span class="stamp-big">新纪录</span>` : ""}
           </div>
-          <div class="row center"><button class="btn wood big" data-act="again">再跑</button><button class="btn big" data-act="close">离开</button></div>`,
+          <div class="row center"><button class="btn wood big" data-act="again">再跑 ${cost(TIME_COST.trial)}</button><button class="btn big" data-act="close">离开</button></div>`,
           {
             again: () => {
-              if (game.clock + TRIAL_MINUTES >= MIDNIGHT) return toast("太晚了");
+              const res = startTrial(game, h.id);
+              if (!res.ok) return toast(res.reason);
               onPanelClose = null;
               closePanel();
               stage.clear();
@@ -1136,7 +1211,7 @@ export function startApp(root: HTMLElement): void {
   };
 
   /** 新手提示只在开场信之后说一句。 */
-  const HOW_TO = "WASD 走动　E 互动　Tab 马厩　M 地图";
+  const HOW_TO = "WASD 走动　E 互动　Tab 马厩　M 地图　点钟表歇脚";
 
   const intro = (): void => {
     if (game.flags.intro) return;
@@ -1188,6 +1263,8 @@ export function startApp(root: HTMLElement): void {
     if (mode !== "world" || game.over) return;
     hud();
     if (world.paused || !veil.hidden || !talkEl.hidden) return;
+    // 钟跳过去以后，等天色转完再开赛、再累倒。
+    if (!world.settled) return;
     if (game.clock >= EVENT_TIME && !game.flags[`ev:${game.day}`]) {
       game.flags[`ev:${game.day}`] = true;
       persist();

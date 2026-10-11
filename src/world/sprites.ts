@@ -674,7 +674,8 @@ export type IconId =
   | "shoe"
   | "menu"
   | "ticket"
-  | "tag";
+  | "tag"
+  | "clock";
 
 function iconDraw(id: IconId, ctx: Ctx): void {
   switch (id) {
@@ -810,6 +811,15 @@ function iconDraw(id: IconId, ctx: Ctx): void {
       px(ctx, 3, 3, "#f2c14e", 9, 9);
       px(ctx, 4, 2, "#f2c14e", 7, 11);
       px(ctx, 6, 5, "#8a5a14", 3, 3);
+      break;
+    case "clock":
+      blob(ctx, 8, 9, 6, "#c99a4a");
+      blob(ctx, 8, 9, 5, "#fbefd4");
+      px(ctx, 6, 1, "#c99a4a", 4, 2);
+      px(ctx, 8, 5, "#3b1c0e", 1, 5);
+      px(ctx, 8, 9, "#3b1c0e", 3, 1);
+      px(ctx, 5, 6, "#ffffff", 2, 1);
+      px(ctx, 8, 4, "#d23a2a", 1, 1);
       break;
     case "scroll":
       px(ctx, 3, 3, "#f4ead2", 10, 10);
