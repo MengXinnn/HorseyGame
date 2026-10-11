@@ -29,7 +29,7 @@ import {
   type Prop,
   type PropKind,
 } from "./tiles";
-import { banner, bubble, floatText, nameTag } from "./labels";
+import { banner, bubble, floatText, nameTag, thinkBubble } from "./labels";
 import { bakeGround, canvas, icon, personFrame, PLAYER_LOOK, type Dir, type PersonLook } from "./sprites";
 import { propSprite } from "./props";
 import { bakeBuildingShadows, buildingSprite } from "./buildingArt";
@@ -842,7 +842,12 @@ export class WorldScene {
         draw: () => {
           shadow(b, x - cx, y - cy, Math.round(11 * h.scale));
           const r = h.drawPixel(b, x - cx, y - cy, HORSE_PPM);
-          if (onClick) this.hits.push({ ...r, act: onClick });
+          if (onClick) this.hits.push({ x: r.x, y: r.y, w: r.w, h: r.h, act: onClick });
+          if (r.bubble) {
+            const { text, x: bx, y: by } = r.bubble;
+            const [Z, k] = [this.screenPx, this.textPx];
+            this.labels.push((sc) => thinkBubble(sc, Math.round(bx) * Z, Math.round(by) * Z, text, k));
+          }
           // 马头顶的高度：按体型估，不用缓冲画布的上沿（那里留了空白）。
           const top = Math.round(y - cy - 2.5 * HORSE_PPM * h.scale);
           if (tag && Math.hypot(h.x - s.player.x, h.z - s.player.z) < 5) {

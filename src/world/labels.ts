@@ -17,13 +17,44 @@ interface Ink {
   h: number;
 }
 
+/** 画布里有字的行：[第一行, 最后一行]。 */
+function inkRows(c: HTMLCanvasElement): [number, number] {
+  const { width: w, height: h } = c;
+  const d = (c.getContext("2d") as Ctx).getImageData(0, 0, w, h).data;
+  let top = h;
+  let bottom = -1;
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      if (d[(y * w + x) * 4 + 3]! > 0) {
+        top = Math.min(top, y);
+        bottom = y;
+        break;
+      }
+  return bottom < 0 ? [0, h - 1] : [top, bottom];
+}
+
+const rowsCache = new WeakMap<HTMLCanvasElement, [number, number]>();
+const rowsOf = (c: HTMLCanvasElement): [number, number] => {
+  let r = rowsCache.get(c);
+  if (!r) {
+    r = inkRows(c);
+    rowsCache.set(c, r);
+  }
+  return r;
+};
+
 /**
- * 一段字的墨迹框。textSprite 左边留 2 像素、顶上 1 像素空白，汉字占 11 行；
+ * 一段字的墨迹框。横向按字宽（textSprite 左边留 2 像素）；纵向取一个满格汉字的上下沿，
+ * 再并上这段字自己的墨迹，所以不同系统上字形高低差一两个像素也不会被裁掉，名牌高度也一致。
  * 描边的再往外扩 1 像素。
  */
 function ink(text: string, color: string, line: string | null = null): Ink {
   const c = textSprite(text, color, line);
-  return line ? { c, ox: 1, oy: 0, w: c.width - 2, h: 13 } : { c, ox: 2, oy: 1, w: c.width - 4, h: 11 };
+  const [r0, r1] = rowsOf(textSprite("国", color, line));
+  const [t0, t1] = rowsOf(c);
+  const oy = Math.min(r0, t0);
+  const h = Math.max(r1, t1) - oy + 1;
+  return line ? { c, ox: 1, oy, w: c.width - 2, h } : { c, ox: 2, oy, w: c.width - 4, h };
 }
 
 function put(s: Ctx, g: Ink, x: number, y: number, k: number): void {
@@ -101,4 +132,24 @@ export function banner(s: Ctx, x: number, y: number, text: string, k: number): v
   r(3, h / 2 - 1, 2, 2, "#f2c14e");
   r(w - 5, h / 2 - 1, 2, 2, "#f2c14e");
   put(s, g, x0 + 13 * k, y0 + 3 * k, k);
+}
+
+/** 马头顶的念头气泡（发呆「…」、绊了一下「!」、摔晕「晕」）：小纸条加一个尖。(x, y) 是尖的位置。 */
+export function thinkBubble(s: Ctx, x: number, y: number, text: string, k: number): void {
+  const g = ink(text, DARK);
+  const w = Math.max(g.w + 6, 13);
+  const h = g.h + 4;
+  const x0 = Math.round(x - (w * k) / 2);
+  const y0 = Math.round(y - (h + 3) * k);
+  const r = grid(s, x0, y0, k);
+  r(-1, 0, w + 2, h, DARK);
+  r(0, -1, w, h + 2, DARK);
+  r(0, 0, w, h, "#fff6e0");
+  r(0, h - 1, w, 1, "#e8cf9c");
+  const m = Math.floor(w / 2);
+  r(m - 2, h, 4, 2, DARK);
+  r(m - 1, h + 2, 2, 1, DARK);
+  r(m - 1, h, 2, 1, "#fff6e0");
+  r(m - 1, h - 1, 2, 1, "#fff6e0");
+  put(s, g, x0 + Math.round((w - g.w) / 2) * k, y0 + 2 * k, k);
 }

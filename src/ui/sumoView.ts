@@ -1,6 +1,7 @@
 import { mix, shade } from "../render/color";
 import { drawCrowd } from "../render/crowd";
 import { lookFor, toScreen, type View } from "../render/horseArt";
+import { thinkBubble } from "../world/labels";
 import { drawScene, PALETTES } from "../render/scene";
 import { STEP } from "../sim/race";
 import type { SumoBout } from "../sim/sumo";
@@ -156,12 +157,14 @@ export class SumoView {
     ctx.restore();
 
     const poses = bout.poses();
-    poses.forEach((pose, i) => {
+    const bubbles = poses.map((pose, i) => {
       const horse = bout.horses[i]!;
-      drawPixelHorse(ctx, pose, horse.plan, lookFor(horse.plan, sc.rim), view);
+      return drawPixelHorse(ctx, pose, horse.plan, lookFor(horse.plan, sc.rim), view);
     });
 
-    this.drawHud(this.surface.present(), W, H);
+    const screen = this.surface.present();
+    for (const b of bubbles) if (b) thinkBubble(screen, b.x, b.y, b.text, 2);
+    this.drawHud(screen, W, H);
   }
 
   private drawHud(ctx: CanvasRenderingContext2D, W: number, H: number): void {

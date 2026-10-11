@@ -19,40 +19,63 @@ export function canvas(w: number, h: number): [HTMLCanvasElement, Ctx] {
   return [c, ctx];
 }
 
-/** 字体加载完成前画的字会用后备字体，所以缓存要等字体到位。 */
-export const fontReady = (): boolean => document.fonts.check(`12px ${PIXEL_FONT}`);
+/** 字体加载完成前画的字会用后备字体，所以缓存要等字体到位。给了 text 时只看这几个字所在的分片是否已加载。 */
+export const fontReady = (text?: string): boolean => document.fonts.check(`12px ${PIXEL_FONT}`, text);
 
 const textCache = new Map<string, HTMLCanvasElement>();
+/** 已经请求加载过的字（字体按字符分片，用到才下载）。 */
+const requested = new Set<string>();
+
+/** 先放大这么多倍画字，再取每个字像素的中心点。 */
+const SS = 4;
 
 /**
- * 像素字：12px 像素字体画进小画布，透明度一刀切成 0/255，
- * 去掉浏览器的抗锯齿灰边，放大后才是干净的方块字。可选一圈描边。
+ * 像素字：12px 像素字体，每个字像素只有「有」和「没有」，放大后是干净的方块字。可选一圈描边。
+ *
+ * 不能直接按 12px 画再把透明度一刀切：有的系统（字体度量取整不同、Mac 的文字渲染）会把字形
+ * 摆在半个像素上，一笔横跨两行、每行都只有一半深，切完整行笔画就没了。
+ * 所以先按 4 倍大小画，再在每个字像素的正中取样：字形偏出去不到半个字像素都不影响。
  */
 export function textSprite(text: string, color: string, line: string | null = null): HTMLCanvasElement {
   const key = `${text}|${color}|${line}`;
   const hit = textCache.get(key);
   if (hit) return hit;
+  const ready = fontReady(text);
+  if (!ready && !requested.has(text)) {
+    requested.add(text);
+    void document.fonts.load(`12px ${PIXEL_FONT}`, text);
+  }
   const [m, mctx] = canvas(1, 1);
   mctx.font = `12px ${PIXEL_FONT}`;
   const w = Math.ceil(mctx.measureText(text).width) + 2;
-  const [c, ctx] = canvas(w + 2, 16);
-  ctx.font = `12px ${PIXEL_FONT}`;
-  ctx.textBaseline = "top";
-  ctx.fillStyle = color;
-  ctx.fillText(text, 2, 2);
-  if (line) outline(c, line, 100);
-  else hardEdge(c, 100);
   m.width = 0;
-  if (fontReady()) textCache.set(key, c);
-  return c;
-}
-
-function hardEdge(c: HTMLCanvasElement, threshold: number): void {
-  const ctx = c.getContext("2d") as Ctx;
-  const img = ctx.getImageData(0, 0, c.width, c.height);
+  const W = w + 2;
+  const H = 16;
+  const [big, bctx] = canvas(W * SS, H * SS);
+  bctx.font = `${12 * SS}px ${PIXEL_FONT}`;
+  bctx.textBaseline = "top";
+  bctx.fillStyle = color;
+  bctx.fillText(text, 2 * SS, 2 * SS);
+  const src = bctx.getImageData(0, 0, W * SS, H * SS).data;
+  const [c, ctx] = canvas(W, H);
+  const img = ctx.createImageData(W, H);
   const d = img.data;
-  for (let i = 3; i < d.length; i += 4) d[i] = d[i]! >= threshold ? 255 : 0;
+  const [r, g, b] = [parseInt(color.slice(1, 3), 16), parseInt(color.slice(3, 5), 16), parseInt(color.slice(5, 7), 16)];
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const a = src[((y * SS + SS / 2) * W * SS + x * SS + SS / 2) * 4 + 3]!;
+      if (a < 128) continue;
+      const i = (y * W + x) * 4;
+      d[i] = r;
+      d[i + 1] = g;
+      d[i + 2] = b;
+      d[i + 3] = 255;
+    }
   ctx.putImageData(img, 0, 0);
+  big.width = 0;
+  if (line) outline(c, line, 100);
+  if (ready) textCache.set(key, c);
+  return c;
 }
 
 export const px = (ctx: Ctx, x: number, y: number, color: string, w = 1, h = 1): void => {

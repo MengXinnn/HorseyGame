@@ -110,9 +110,19 @@ function mirrorPose(pose: HorsePose): HorsePose {
   };
 }
 
-/** 按物理姿态画一匹马。朝左（facing −1）的马画成朝右的马的镜像，气泡里的字不镜像。 */
-export function drawHorsePose(ctx: CanvasRenderingContext2D, pose: HorsePose, plan: BodyPlan, look: HorseLook, view: View): void {
-  const bubble = pose.stalled || pose.fallen || pose.stumbling ? (pose.fallen ? "晕" : pose.stumbling ? "!" : "…") : null;
+/** 马头顶的小气泡：发呆、绊了一下、摔晕。位置是头顶上方气泡尖该指的地方（画布坐标）。 */
+export interface HorseBubble {
+  text: string;
+  x: number;
+  y: number;
+}
+
+/**
+ * 按物理姿态画一匹马。朝左（facing −1）的马画成朝右的马的镜像。
+ * 气泡不在这里画（马常常先画进小缓冲再放大，气泡跟着放大就糊了），只返回位置，由调用方按像素风格画。
+ */
+export function drawHorsePose(ctx: CanvasRenderingContext2D, pose: HorsePose, plan: BodyPlan, look: HorseLook, view: View): HorseBubble | null {
+  const text = pose.stalled || pose.fallen || pose.stumbling ? (pose.fallen ? "晕" : pose.stumbling ? "!" : "…") : null;
   if (pose.facing === -1) {
     const [tx] = toScreen(view, pose.torso);
     ctx.save();
@@ -121,11 +131,10 @@ export function drawHorsePose(ctx: CanvasRenderingContext2D, pose: HorsePose, pl
     ctx.translate(-tx, 0);
     const [bx, by] = drawFacingRight(ctx, mirrorPose(pose), plan, look, view);
     ctx.restore();
-    if (bubble) drawBubble(ctx, 2 * tx - bx, by, bubble, look.rim);
-  } else {
-    const [bx, by] = drawFacingRight(ctx, pose, plan, look, view);
-    if (bubble) drawBubble(ctx, bx, by, bubble, look.rim);
+    return text ? { text, x: 2 * tx - bx, y: by } : null;
   }
+  const [bx, by] = drawFacingRight(ctx, pose, plan, look, view);
+  return text ? { text, x: bx, y: by } : null;
 }
 
 /** 画一匹头朝右的马，返回头顶气泡的位置（屏幕像素）。 */
@@ -371,20 +380,3 @@ function drawFacingRight(ctx: CanvasRenderingContext2D, pose: HorsePose, plan: B
   return [bx + w * 2, by - w * 5];
 }
 
-function drawBubble(ctx: CanvasRenderingContext2D, x: number, y: number, text: string, rim: string): void {
-  ctx.save();
-  ctx.font = "600 15px 'Noto Sans SC', sans-serif";
-  const tw = Math.max(26, ctx.measureText(text).width + 16);
-  ctx.fillStyle = "rgba(255,250,240,0.92)";
-  ctx.strokeStyle = rgba(rim, 0.9);
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.roundRect(x - tw / 2, y - 13, tw, 26, 13);
-  ctx.fill();
-  ctx.stroke();
-  ctx.fillStyle = "#2a1b2e";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(text, x, y + 1);
-  ctx.restore();
-}

@@ -3,7 +3,7 @@
  * 名牌、计时这些字最后用像素字体直接画在屏幕上，保持清楚。
  */
 import type { BodyPlan } from "../body/bodyPlan";
-import { drawHorsePose, lookFor, toScreen, type View } from "../render/horseArt";
+import { drawHorsePose, lookFor, toScreen, type HorseBubble, type View } from "../render/horseArt";
 import type { HorsePose } from "../sim/horse";
 import { canvas, outline, textSprite } from "../world/sprites";
 
@@ -65,7 +65,8 @@ export class PixelSurface {
 const scratch = canvas(1, 1);
 
 /** 一匹马单独画进小画布，去掉灰边、描一圈深色线，再贴进缓冲。 */
-export function drawPixelHorse(buf: Ctx, pose: HorsePose, plan: BodyPlan, look: ReturnType<typeof lookFor>, view: View, alpha = 1): void {
+/** 画一匹像素马，返回头顶气泡（CSS 坐标），等 present() 以后用 thinkBubble 画在屏幕上。 */
+export function drawPixelHorse(buf: Ctx, pose: HorsePose, plan: BodyPlan, look: ReturnType<typeof lookFor>, view: View, alpha = 1): HorseBubble | null {
   const reach = (plan.torsoLength + plan.neckLength + plan.tailLength + 1.2) * view.ppm;
   const tall = (Math.max(plan.legFront, plan.legRear) + plan.torsoHeight + plan.neckLength + 0.8) * view.ppm;
   const [cx, cy] = toScreen(view, { x: pose.torso.x, y: pose.torso.y });
@@ -81,12 +82,13 @@ export function drawPixelHorse(buf: Ctx, pose: HorsePose, plan: BodyPlan, look: 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, c.width, c.height);
   ctx.setTransform(1 / PX, 0, 0, 1 / PX, -x0 / PX, -y0 / PX);
-  drawHorsePose(ctx, pose, plan, look, view);
+  const bubble = drawHorsePose(ctx, pose, plan, look, view);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   outlineRegion(c, w, h);
   buf.globalAlpha = alpha;
   buf.drawImage(c, 0, 0, w, h, x0, y0, w * PX, h * PX);
   buf.globalAlpha = 1;
+  return bubble;
 }
 
 /** outline() 只认整张画布，这里只处理用到的左上角一块。 */
