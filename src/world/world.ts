@@ -1,8 +1,8 @@
 import { hashSeed } from "../sim/rng";
 import { express } from "../genome/genome";
-import { addCaught, canCatch, HOME, isFoal, wildHerd, type GameState } from "../game/state";
-import { MINUTES_PER_SECOND } from "../game/season";
+import { addCaught, canCatch, HOME, isFoal, throwLasso, travel, wildHerd, type GameState } from "../game/state";
 import {
+  arrivedRegion,
   BUILDINGS,
   INTERACTS,
   inside,
@@ -191,6 +191,10 @@ export class WorldScene {
   private camY = 0;
   private raf = 0;
   private last = 0;
+  /** 画面上的钟：做了事以后时间一下子跳过去，天色跟着几秒内慢慢转过去。 */
+  private shown = 0;
+  /** 上回在哪片地方算过路上的时间。 */
+  private place = "";
   /** 打开面板、比赛进行中时暂停世界（时钟也停）。 */
   paused = false;
   active = true;
@@ -208,6 +212,7 @@ export class WorldScene {
     this.reflectors = PROPS.filter((p) => REFLECTS.has(p.kind) && nearWaterBelow(p.x, p.z));
     this.state = state;
     this.hooks = hooks;
+    this.shown = state.clock;
     this.fixPlayer();
     this.sync();
     this.bindInput();
@@ -217,8 +222,19 @@ export class WorldScene {
   setState(state: GameState): void {
     this.state = state;
     this.herdDay = -1;
+    this.shown = state.clock;
     this.fixPlayer();
     this.sync();
+  }
+
+  /** 画面上的钟点（界面的钟盘和天色都看它）。 */
+  get clock(): number {
+    return this.shown;
+  }
+
+  /** 画面上的钟已经追上真正的时间了（天色转完了）。 */
+  get settled(): boolean {
+    return Math.abs(this.state.clock - this.shown) < 0.5;
   }
 
   /** 旧存档里的位置是旧地图的坐标（或者站不住），挪回家门口。 */
@@ -229,6 +245,7 @@ export class WorldScene {
       s.player = { ...HOME };
     }
     if (!walkable(s.player.x, s.player.z)) s.player = { ...HOME };
+    this.place = regionAt(s.player.x, s.player.z)?.id ?? "";
   }
 
   /** 马厩里的马变了、换了一天：重建牧场里的马和野马群。 */
@@ -346,9 +363,17 @@ export class WorldScene {
     this.last = now;
     if (!this.active) return;
     if (!this.paused) this.update(dt);
+    this.easeClock(dt);
     this.render();
     if (this.minimapCanvas) this.minimap.drawLocal(this.minimapCanvas, this.mapMarks(), dt);
   };
+
+  /** 钟往前跳了一大段时，画面上的钟追过去：差得越多追得越快，一两秒内追上；新的一天直接对齐。 */
+  private easeClock(dt: number): void {
+    const d = this.state.clock - this.shown;
+    if (d < 0 || d > 24 * 60) this.shown = this.state.clock;
+    else if (d > 0) this.shown += Math.min(d, Math.max(60, d * 3) * dt);
+  }
 
   /** 小地图要的：人在哪、马在哪。 */
   mapMarks(): MapMarks {
@@ -369,13 +394,21 @@ export class WorldScene {
   private update(dt: number): void {
     this.time += dt;
     const s = this.state;
-    s.clock += dt * MINUTES_PER_SECOND;
     this.movePlayer(dt);
+    // 时间不会自己走：只有走到另一片地方，路上才花一段时间。
+    const arrived = arrivedRegion(s.player.x, s.player.z);
+    if (arrived && arrived.id !== this.place) {
+      if (this.place) {
+        travel(s);
+        this.hooks.onChange();
+      }
+      this.place = arrived.id;
+    }
     this.updatePaddock(dt);
     this.updateHerd(dt);
     this.tiedun?.update(dt);
     this.updateLasso(dt);
-    this.ambient.update(dt, { cx: this.camX, cy: this.camY, bw: this.buf.width, bh: this.buf.height }, s.clock, {
+    this.ambient.update(dt, { cx: this.camX, cy: this.camY, bw: this.buf.width, bh: this.buf.height }, this.shown, {
       x: s.player.x,
       z: s.player.z,
       running: this.running,
@@ -548,7 +581,11 @@ export class WorldScene {
       this.target = { x: s.player.x + (h.x - s.player.x) * k, z: s.player.z + (h.z - s.player.z) * k };
       return;
     }
-    s.lassos--;
+    const thrown = throwLasso(s);
+    if (!thrown.ok) {
+      this.hooks.onToast(thrown.reason);
+      return;
+    }
     this.hooks.onChange();
     const chance = Math.max(0.15, Math.min(0.9, 1 - d / 9 - (h.speed * METERS_PER_TILE) / 22));
     const dx = h.x - s.player.x;
@@ -651,7 +688,7 @@ export class WorldScene {
     const cx = this.camX;
     const cy = this.camY;
     this.hits = [];
-    const amb = ambientAt(s.clock);
+    const amb = ambientAt(this.shown);
     const t = this.time;
 
     b.fillStyle = "#1d3d1f";

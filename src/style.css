@@ -343,11 +343,46 @@ canvas,
   display: flex;
   align-items: center;
   gap: calc(var(--u) * 2);
+  cursor: pointer;
+  color: inherit;
+  text-align: inherit;
   padding: calc(var(--u) * 1) calc(var(--u) * 3) calc(var(--u) * 1) calc(var(--u) * 1);
   border: solid transparent;
   border-width: calc(var(--u) * 8);
   border-image: var(--f-menu) 8 fill / calc(var(--u) * 8) / 0 stretch;
   image-rendering: pixelated;
+}
+
+.cb-main:hover .cb-time {
+  color: var(--red);
+}
+
+/* 时间走了一段：钟旁边冒一个「+30分」，往上飘着淡掉。 */
+.cb-plus {
+  position: absolute;
+  right: calc(100% + var(--u) * 2);
+  top: calc(var(--u) * 30);
+  font-size: var(--fs);
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  color: var(--gold);
+  text-shadow: var(--outline);
+  animation: tick-up 1.4s steps(7) forwards;
+}
+
+@keyframes tick-up {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  to {
+    transform: translateY(calc(var(--u) * -14));
+    opacity: 0;
+  }
 }
 
 .cb-dial {
@@ -474,6 +509,39 @@ canvas,
   to {
     transform: rotate(3deg);
   }
+}
+
+/* ---------------- 按钮上的时间花费 ---------------- */
+
+.cost {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u);
+  font-size: var(--fs-s);
+  line-height: 1;
+  color: var(--ink-soft);
+}
+
+.cost .ico {
+  width: calc(var(--u) * 8);
+  height: calc(var(--u) * 8);
+}
+
+/* ---------------- 歇脚 ---------------- */
+
+.rest-clock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--u) * 3);
+  margin-bottom: calc(var(--u) * 4);
+  font-size: var(--fs-l);
+  line-height: 1;
+}
+
+.rest-clock b {
+  font-weight: normal;
+  letter-spacing: 0.06em;
 }
 
 /* ---------------- HUD：左上角小地图 ---------------- */

@@ -9,15 +9,18 @@ import {
   DAY_START,
   debtDue,
   ENTRY_FEE,
+  EVENT_TIME,
   eventFor,
   feedCost,
   FOAL_DAYS,
   LASSOS_PER_DAY,
+  MIDNIGHT,
   RACE_PRIZES,
   salePrice,
   SEQUENCING_FEE,
   START_MONEY,
   SUMO_PRIZE,
+  TIME_COST,
   betLimit,
   betPayout,
   type EventKind,
@@ -322,6 +325,50 @@ export type ActionResult = { ok: true } | { ok: false; reason: string };
 const fail = (reason: string): ActionResult => ({ ok: false, reason });
 const OK: ActionResult = { ok: true };
 
+/* ---------------- 时间 ---------------- */
+
+const TOO_LATE = "太晚了，明天再说";
+
+/** 还来得及做这件事吗：做完不能过午夜。 */
+export function hasTime(state: GameState, minutes: number): boolean {
+  return state.clock + minutes <= MIDNIGHT;
+}
+
+/** 花掉一段时间，最多到午夜。 */
+export function passTime(state: GameState, minutes: number): void {
+  state.clock = Math.min(MIDNIGHT, state.clock + minutes);
+}
+
+/** 走到另一片地方。走路不会被拦下；走过了午夜就累倒在路边。 */
+export function travel(state: GameState): void {
+  passTime(state, TIME_COST.travel);
+}
+
+/** 歇一会儿。 */
+export function rest(state: GameState, minutes: number = TIME_COST.rest): ActionResult {
+  if (!hasTime(state, minutes)) return fail(TOO_LATE);
+  passTime(state, minutes);
+  return OK;
+}
+
+/** 今天的赛事还没开吗。 */
+export const eventPending = (state: GameState): boolean => !state.flags[`ev:${state.day}`] && state.clock < EVENT_TIME;
+
+/** 一直等到傍晚开赛。 */
+export function waitForEvent(state: GameState): ActionResult {
+  if (!eventPending(state)) return fail("今天已经开过赛了");
+  state.clock = EVENT_TIME;
+  return OK;
+}
+
+/** 试跑一趟。 */
+export function startTrial(state: GameState, horseId: string): ActionResult {
+  if (!findHorse(state, horseId)) return fail("找不到这匹马");
+  if (!hasTime(state, TIME_COST.trial)) return fail(TOO_LATE);
+  passTime(state, TIME_COST.trial);
+  return OK;
+}
+
 /** 配种：当晚怀上，第二天早上小马出生。 */
 export function mate(state: GameState, damId: string, sireId: string): ActionResult {
   const dam = findHorse(state, damId);
@@ -330,6 +377,8 @@ export function mate(state: GameState, damId: string, sireId: string): ActionRes
   if (isFoal(dam, state.day) || isFoal(sire, state.day)) return fail("小马还没长大");
   if (dam.bredDay === state.day || sire.bredDay === state.day) return fail("今天配过了");
   if (state.horses.length + state.pregnancies.length >= STABLE_LIMIT) return fail("马厩满了");
+  if (!hasTime(state, TIME_COST.mate)) return fail(TOO_LATE);
+  passTime(state, TIME_COST.mate);
   dam.bredDay = state.day;
   sire.bredDay = state.day;
   state.pregnancies.push({ damId, sireId, dueDay: state.day + 1 });
@@ -341,7 +390,9 @@ export function sendToSequencing(state: GameState, id: string): ActionResult {
   const h = findHorse(state, id);
   if (!h) return fail("找不到这匹马");
   if (h.sequenced || h.sequencing) return fail("已经测过了");
+  if (!hasTime(state, TIME_COST.sequence)) return fail(TOO_LATE);
   if (!spend(state, `测序 ${h.name}`, SEQUENCING_FEE)) return fail("钱不够");
+  passTime(state, TIME_COST.sequence);
   h.sequencing = true;
   return OK;
 }
@@ -358,6 +409,8 @@ export function sellHorse(state: GameState, id: string): ActionResult {
   if (state.horses.length <= 1) return fail("最后一匹马不能卖");
   if (state.entry?.horseId === id) return fail("它报名了今天的比赛");
   if (state.pregnancies.some((p) => p.damId === id || p.sireId === id)) return fail("它刚配过种");
+  if (!hasTime(state, TIME_COST.sell)) return fail(TOO_LATE);
+  passTime(state, TIME_COST.sell);
   earn(state, `卖掉 ${h.name}`, sellPrice(state, h));
   state.horses = state.horses.filter((x) => x.id !== id);
   if (state.selectedId === id) state.selectedId = state.horses[0]!.id;
@@ -367,6 +420,17 @@ export function sellHorse(state: GameState, id: string): ActionResult {
 export function canCatch(state: GameState): ActionResult {
   if (state.lassos <= 0) return fail("今天的套索用完了");
   if (state.horses.length + state.pregnancies.length >= STABLE_LIMIT) return fail("马厩满了");
+  // 扔出去万一套中，还得留出牵马回去的工夫。
+  if (!hasTime(state, TIME_COST.throwLasso + TIME_COST.catch)) return fail(TOO_LATE);
+  return OK;
+}
+
+/** 扔一次套索：用掉一根，花一点时间。 */
+export function throwLasso(state: GameState): ActionResult {
+  const ok = canCatch(state);
+  if (!ok.ok) return ok;
+  state.lassos--;
+  passTime(state, TIME_COST.throwLasso);
   return OK;
 }
 
@@ -376,6 +440,7 @@ export function addCaught(state: GameState, name: string, genome: Genome): Stabl
   const finalName = taken.has(name) ? horseName(rngFor(state, "rename"), taken) : name;
   const horse = createHorse(finalName, genome);
   state.horses.push(horse);
+  passTime(state, TIME_COST.catch);
   return horse;
 }
 
@@ -391,10 +456,12 @@ export function wildHerd(state: GameState, region: number, count: number): Array
 }
 
 /** 用马码导入一匹马（朋友分享的马）。 */
-export function importHorse(state: GameState, code: string): StableHorse | "full" | "invalid" {
+export function importHorse(state: GameState, code: string): StableHorse | "full" | "invalid" | "late" {
   if (state.horses.length + state.pregnancies.length >= STABLE_LIMIT) return "full";
   const genome = decodeGenome(code.trim());
   if (!genome) return "invalid";
+  if (!hasTime(state, TIME_COST.import)) return "late";
+  passTime(state, TIME_COST.import);
   const rng = rngFor(state, `import:${code}`);
   const horse = createHorse(horseName(rng, new Set(state.horses.map((h) => h.name))), genome);
   state.horses.push(horse);
@@ -458,7 +525,9 @@ export function register(state: GameState, horseId: string): ActionResult {
   if (isFoal(h, state.day)) return fail("小马不能参赛");
   if (state.entry?.day === state.day) return fail("今天已经报过名");
   if (state.bet?.day === state.day) return fail("先报名再下注");
+  if (!eventPending(state)) return fail("今天的报名截止了");
   if (!spend(state, "报名费", ENTRY_FEE)) return fail("钱不够");
+  passTime(state, TIME_COST.register);
   state.entry = { day: state.day, kind: eventFor(state.day), horseId };
   return OK;
 }
@@ -466,6 +535,7 @@ export function register(state: GameState, horseId: string): ActionResult {
 /** 下注。 */
 export function placeBet(state: GameState, horseId: string, amount: number, insured: boolean): ActionResult {
   if (state.bet?.day === state.day) return fail("今天已经下过注");
+  if (!eventPending(state)) return fail("收摊了，明天请早");
   const field = todaysField(state);
   const i = field.findIndex((f) => f.id === horseId);
   if (i < 0) return fail("这匹马今天不上场");
@@ -473,6 +543,7 @@ export function placeBet(state: GameState, horseId: string, amount: number, insu
   if (amount > betLimit(state.reputation)) return fail("超过下注上限");
   const odds = todaysOdds(state)[i] as number;
   if (!spend(state, "下注", amount)) return fail("钱不够");
+  passTime(state, TIME_COST.bet);
   state.bet = { day: state.day, horseId, amount, odds, insured };
   return OK;
 }
