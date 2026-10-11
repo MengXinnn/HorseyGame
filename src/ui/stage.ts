@@ -282,7 +282,9 @@ export class Stage {
     ctx.fillText(race.started ? clock : "预备…", 26, 42);
     ctx.font = "500 13px 'Noto Sans SC', sans-serif";
     ctx.fillStyle = "rgba(251,239,217,0.8)";
-    ctx.fillText(`${dist.toFixed(1)} 米 · ${(speed * 3.6).toFixed(0)} 公里/时`, 26, 64);
+    const distText = `${dist.toFixed(1)} 米`;
+    ctx.fillText(distText, 26, 64);
+    ctx.fillText(me.horse.state === "fallen" ? "摔倒" : `${(speed * 3.6).toFixed(0)} 公里/时`, 26 + ctx.measureText(distText).width + 16, 64);
 
     if (mode === "race") {
       // 顶部进度条：每匹马一个点。

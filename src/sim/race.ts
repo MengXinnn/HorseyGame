@@ -6,6 +6,8 @@ import { createRng, type Rng } from "./rng";
 
 export const STEP = 1 / 60;
 const SETTLE_TIME = 1.0;
+/** 摔倒的马趴稳这么久之后才算出局，让倒地的过程演完。 */
+const DOWN_OUT = 1.5;
 
 export interface Entrant {
   id: string;
@@ -16,7 +18,7 @@ export interface Entrant {
 export interface RaceOptions {
   distance: number;
   seed: number;
-  /** 超时秒数；超时还没到终点的马按跑过的距离排名。 */
+  /** 超时秒数；超时还没到终点的马（包括摔倒趴下的）按跑过的距离排名。 */
   timeLimit: number;
   gravity?: number;
   groundFriction?: number;
@@ -83,7 +85,7 @@ export class Race {
   }
 
   get finished(): boolean {
-    return this.raceTime >= this.options.timeLimit || this.runners.every((r) => r.finishTime !== null);
+    return this.raceTime >= this.options.timeLimit || this.runners.every((r) => r.finishTime !== null || r.horse.downTime >= DOWN_OUT);
   }
 
   progress(r: Runner): number {

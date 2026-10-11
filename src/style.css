@@ -428,6 +428,49 @@ h3 {
   text-align: left;
 }
 
+.results tr:first-child td {
+  border-top: 0;
+}
+
+.results td.rank {
+  font-family: var(--serif);
+  font-weight: 900;
+  color: var(--muted);
+  width: 2em;
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.results td.chips {
+  display: table-cell;
+  text-align: right;
+}
+
+.chip {
+  display: inline-block;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 0 9px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+.results .chip + .chip {
+  margin-left: 4px;
+}
+
+.chip.bad {
+  background: var(--red);
+  color: #fff;
+  font-weight: 700;
+}
+
 .results tr.mine td {
   color: var(--gold);
   font-weight: 700;
@@ -454,14 +497,15 @@ h3 {
   min-height: 58px;
 }
 
-.arena-bar p {
-  margin: 0;
-  color: var(--muted);
-  flex: 1 1 220px;
+.arena-bar .bar-name {
+  font-family: var(--serif);
+  font-size: 18px;
+  letter-spacing: 0.08em;
+  margin-right: auto;
 }
 
-.arena-bar p strong {
-  color: var(--text);
+.arena-bar .speed {
+  margin-left: auto;
 }
 
 .arena-bar .btn.primary {
@@ -623,14 +667,14 @@ h3 {
 }
 
 .unknown {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   background: rgba(0, 0, 0, 0.18);
   border: 1px dashed var(--panel-line);
   border-radius: 12px;
   padding: 10px 12px;
-}
-
-.unknown p:first-child {
-  margin-top: 0;
+  color: var(--muted);
 }
 
 .genes {
@@ -693,8 +737,37 @@ h3 {
 }
 
 .record {
-  margin: 0;
-  font-size: 13px;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+}
+
+.rec {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  padding: 4px 0;
+}
+
+.rec b {
+  font-family: var(--serif);
+  font-size: 17px;
+  color: var(--gold);
+}
+
+.rec small {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.parts i {
+  font-style: normal;
+}
+
+.parts i + i {
+  margin-left: 0.9em;
 }
 
 .breed {
@@ -738,7 +811,7 @@ code {
 
 .foot {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   flex-wrap: wrap;
   margin-top: 16px;

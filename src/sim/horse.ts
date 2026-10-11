@@ -15,6 +15,15 @@ const SUPPORT_D = 6;
 const HOOF_SLIP = 0.1;
 const BODY_FRICTION = 0.15;
 const MAX_JOINT_SPEED = 14;
+/** 落脚反射：蹄子平均落在髋（肩）正下方偏前一点，身体才不会往前栽。 */
+const LEG_REACH_TARGET = { front: 0.04, rear: 0.06 };
+const LEG_REACH_GAIN = 1.2;
+/** 摔倒后关节只留这么一点劲，腿软软地瘫着。 */
+const FALLEN_GRIP = 0.06;
+/** 摔倒后把身体放平的力度（相对平衡反射）。 */
+const FALLEN_SETTLE = 0.5;
+/** 摔倒后身体在地上滑行的阻尼。 */
+const FALLEN_DRAG = 2;
 /** 蹄子离地多高以内仍能借上力（米）。 */
 const REACH = 0.3;
 
@@ -77,10 +86,10 @@ export class HorseSim {
   private readonly restAngle: number;
   private readonly standHeight: number;
   private fallenFor = 0;
-  private fallenLeft = 0;
-  private recoverLeft = 0;
   stamina: number;
   falls = 0;
+  /** 摔倒后已经趴了多久（秒）。 */
+  downTime = 0;
   /** 跑动中偏离自然姿态的最大角度，用于平衡测试。 */
   maxTilt = 0;
   stalls = 0;
@@ -91,6 +100,9 @@ export class HorseSim {
   /** 赛场地面摩擦（雨天泥地、冰面等修正会改它）。 */
   groundFriction = 1;
   private contact = 1;
+  /** 前腿、后腿的落脚前移量（弧度），由落脚反射慢慢调出来。 */
+  private reachFront = 0.05;
+  private reachRear = -0.05;
 
   constructor(world: World, plan: BodyPlan, x: number, group: number, rng: Rng) {
     this.world = world;
@@ -189,24 +201,13 @@ export class HorseSim {
 
     if (this.active) this.maxTilt = Math.max(this.maxTilt, Math.abs(tilt - this.restAngle));
     // 摔倒检测：躯干翻过 75° 持续一段时间，或者绊跤时脑袋、肚子着地，就算摔倒。
-    // 摔倒后趴一会儿再靠平衡反射自己翻起来；实在翻不过来（四脚朝天）就扶正放回原地。
-    const headDown = touchingGround(this.torso) || touchingGround(this.neck);
-    const down = Math.abs(tilt) > 1.3 || headDown;
-    this.fallenFor = down ? this.fallenFor + dt : 0;
-    if (this.recoverLeft > 0) {
-      this.recoverLeft -= dt;
-      if (this.recoverLeft <= 0 && down) this.standUp();
-    } else if (this.state !== "fallen" && (this.fallenFor > 0.5 || (this.state === "stumbling" && headDown))) {
-      this.state = "fallen";
-      this.falls++;
-      this.fallenLeft = 1.6 + this.rng.next() * 0.8;
-    }
-    if (this.state === "fallen") {
-      this.fallenLeft -= dt;
-      if (this.fallenLeft <= 0) {
-        this.state = "running";
-        this.recoverLeft = 1.5;
-      }
+    // 摔倒的马就趴在原地，这一场不再起来。
+    if (this.state === "fallen") this.downTime += dt;
+    else {
+      const headDown = touchingGround(this.torso) || touchingGround(this.neck);
+      const down = Math.abs(tilt) > 1.3 || headDown;
+      this.fallenFor = down ? this.fallenFor + dt : 0;
+      if (this.fallenFor > 0.5 || (this.state === "stumbling" && headDown)) this.collapse();
     }
 
     // 跑得越快越容易绊跤；绊跤时身体往前一扑，平衡差的马就真的摔个嘴啃泥。
@@ -248,11 +249,27 @@ export class HorseSim {
       this.stamina = Math.max(0, this.stamina - 2.4 * p.staminaDrain * dt);
     }
 
+    // 落脚反射：蹄子在地上会被往后拖，腿平均斜向身后，整匹马看着就往前栽。
+    // 这里盯着腿的平均倾角，慢慢把落脚点往前调，让蹄子回到肩、髋的正下方。
+    if (running) {
+      let front = 0;
+      let rear = 0;
+      for (const l of this.legs) {
+        const hip = l.hip.getAnchorA();
+        const foot = l.shin.getWorldPoint(new Vec2(0, -l.lower / 2));
+        const slant = Math.atan2(foot.x - hip.x, hip.y - foot.y) / 2;
+        if (l.front) front += slant;
+        else rear += slant;
+      }
+      this.reachFront = clamp(this.reachFront + (LEG_REACH_TARGET.front - front) * LEG_REACH_GAIN * dt, -0.1, 0.5);
+      this.reachRear = clamp(this.reachRear + (LEG_REACH_TARGET.rear - rear) * LEG_REACH_GAIN * dt, -0.2, 0.4);
+    }
+
     const amp = p.hipAmplitude * effort;
     for (const leg of this.legs) {
       const ph = this.phase + leg.phaseOffset;
       // 支撑相（髋角下降）蹬地，摆动相（髋角上升）屈膝抬脚。
-      const hipTarget = amp * Math.sin(ph) + (leg.front ? 0.05 : -0.05) * effort;
+      const hipTarget = amp * Math.sin(ph) + (leg.front ? this.reachFront : this.reachRear) * effort;
       const lift = Math.max(0, Math.cos(ph)) * effort;
       const kneeTarget = leg.front ? -1.0 * lift : 0.9 * lift;
       leg.grounded = touchingGround(leg.shin);
@@ -295,7 +312,10 @@ export class HorseSim {
     const w = this.torso.getAngularVelocity();
     const k = p.balance * p.totalMass * GRAVITY * p.torsoLength * 0.55;
     const torque = Math.max(-k, Math.min(k, -((tilt - this.restAngle) * BAL_P + w * BAL_D) * k));
-    if (this.state !== "fallen") this.torso.applyTorque(this.state === "stumbling" ? 0 : torque, true);
+    if (this.state === "fallen") {
+      // 趴下：栽倒后屁股慢慢落地，整匹马平趴在地上（四脚朝天的就不管了）。
+      if (Math.abs(tilt) < 1.7) this.torso.applyTorque(torque * FALLEN_SETTLE, true);
+    } else this.torso.applyTorque(this.state === "stumbling" ? 0 : torque, true);
 
     // 腿部支撑：身体被压低到站姿高度以下时，着地的腿像弹簧一样把它托回去。
     if (this.state !== "fallen" && this.contact > 0.2) {
@@ -310,25 +330,18 @@ export class HorseSim {
     }
   }
 
-  /** 爬起来：把整匹马扶正放回原地，速度清零。 */
-  private standUp(): void {
-    const pos = this.torso.getPosition();
-    const lift = Math.max(this.plan.legFront, this.plan.legRear) + this.plan.torsoHeight * 0.3 + 0.05;
-    const dy = lift - pos.y;
-    const pivot = pos.clone();
-    const a = -this.torso.getAngle();
-    for (const b of this.bodies) {
-      const bp = b.getPosition();
-      const rx = bp.x - pivot.x;
-      const ry = bp.y - pivot.y;
-      const nx = pivot.x + rx * Math.cos(a) - ry * Math.sin(a);
-      const ny = pivot.y + rx * Math.sin(a) + ry * Math.cos(a) + dy;
-      b.setTransform(new Vec2(nx, ny), b.getAngle() + a);
-      b.setLinearVelocity(new Vec2(0, 0));
-      b.setAngularVelocity(0);
+  /** 摔倒：关节全部松劲，马就趴在地上不再起来。 */
+  private collapse(): void {
+    this.state = "fallen";
+    this.falls++;
+    for (const l of this.legs) {
+      l.hip.setMaxMotorTorque(this.plan.hipTorque * FALLEN_GRIP);
+      l.knee.setMaxMotorTorque(this.plan.kneeTorque * FALLEN_GRIP);
+      l.knee.setLimits(l.front ? -1.7 : -0.15, l.front ? 0.15 : 1.7);
     }
-    this.fallenFor = 0;
-    this.state = "running";
+    this.neckJoint.setMaxMotorTorque(this.plan.hipTorque * FALLEN_GRIP);
+    // 倒在地上会被地面磨停，不会一路滑出去。
+    for (const b of this.bodies) b.setLinearDamping(FALLEN_DRAG);
   }
 
   pose(): HorsePose {
@@ -364,6 +377,10 @@ function touchingGround(body: Body): boolean {
     if (other && other.getType() === "static") return true;
   }
   return false;
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
 }
 
 function drive(joint: RevoluteJoint, target: number, gain: number): void {

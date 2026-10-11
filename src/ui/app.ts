@@ -32,6 +32,10 @@ const TAB_LABELS: Record<Tab, string> = { stable: "马厩", trial: "试跑场", 
 
 const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
 
+/** 几段短信息并排摆放，用间距隔开，不用分隔符。 */
+const parts = (...items: Array<string | false | null | undefined>): string =>
+  `<span class="parts">${items.filter(Boolean).map((t) => `<i>${t}</i>`).join("")}</span>`;
+
 function el<T extends HTMLElement>(root: ParentNode, selector: string): T {
   const found = root.querySelector<T>(selector);
   if (!found) throw new Error(`找不到元素 ${selector}`);
@@ -73,7 +77,6 @@ export function startApp(root: HTMLElement): void {
       <aside class="panel detail" id="detail"></aside>
     </main>
     <footer class="foot">
-      <span>基因决定身体，身体交给物理。马不受你操控，你决定的是这副身体。</span>
       <button class="link" id="btn-reset">重开存档</button>
     </footer>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -162,15 +165,11 @@ export function startApp(root: HTMLElement): void {
 
   const showTrialResult = (h: StableHorse, res: RaceResult, record: boolean): void => {
     const kmh = ((res.distance / TRIAL_SECONDS) * 3.6).toFixed(1);
-    const notes: string[] = [];
-    if (res.falls) notes.push(`摔了 ${res.falls} 跤`);
-    if (res.stumbles > res.falls) notes.push(`绊了 ${res.stumbles - res.falls} 下没摔`);
-    if (res.stalls) notes.push(`发了 ${res.stalls} 次呆`);
     overlay.innerHTML = `
       <div class="result-card">
-        <p class="eyebrow">${esc(h.name)} · 试跑 ${TRIAL_SECONDS} 秒</p>
+        <p class="eyebrow">${esc(h.name)}</p>
         <p class="big">${res.distance.toFixed(1)}<small> 米</small></p>
-        <p>平均 ${kmh} 公里/时${notes.length ? ` · ${notes.join("，")}` : " · 一路顺利"}</p>
+        <p class="chips"><span class="chip">${kmh} 公里/时</span>${statusChips(res)}</p>
         ${record ? `<p class="badge">新纪录</p>` : ""}
         <div class="row"><button class="btn primary" data-act="again">再跑一次</button><button class="btn ghost" data-act="close">收起</button></div>
       </div>`;
@@ -179,21 +178,20 @@ export function startApp(root: HTMLElement): void {
 
   const showRaceResult = (h: StableHorse, results: RaceResult[]): void => {
     const mine = results.find((x) => x.id === h.id) as RaceResult;
-    const title = mine.rank === 1 ? "冠军！" : mine.rank <= 3 ? `第 ${mine.rank} 名，上了领奖台` : `第 ${mine.rank} 名`;
+    const title = mine.rank === 1 ? "冠军！" : `第 ${mine.rank} 名`;
     overlay.innerHTML = `
       <div class="result-card wide">
-        <p class="eyebrow">平地赛 · ${RACE_DISTANCE} 米</p>
+        <p class="eyebrow">平地赛 ${RACE_DISTANCE} 米</p>
         <p class="big">${title}</p>
         <table class="results">
-          <thead><tr><th>名次</th><th>马</th><th>成绩</th><th>状况</th></tr></thead>
           <tbody>
             ${results
               .map(
                 (r) => `<tr class="${r.id === h.id ? "mine" : ""}">
-                  <td>${r.rank}</td>
-                  <td>${esc(r.name)}${r.id === h.id ? "（你的马）" : ""}</td>
+                  <td class="rank">${r.rank}</td>
+                  <td>${esc(r.name)}</td>
                   <td>${r.time !== null ? `${r.time.toFixed(2)} 秒` : `${r.distance.toFixed(0)} 米`}</td>
-                  <td>${[r.falls ? `摔 ${r.falls}` : "", r.stalls ? `呆 ${r.stalls}` : ""].filter(Boolean).join(" · ") || "—"}</td>
+                  <td class="chips">${statusChips(r, false)}</td>
                 </tr>`,
               )
               .join("")}
@@ -203,6 +201,15 @@ export function startApp(root: HTMLElement): void {
       </div>`;
     overlay.hidden = false;
   };
+
+  /** 摔倒、绊跤、发呆，用小标签表示。 */
+  function statusChips(r: RaceResult, stumbles = true): string {
+    return [
+      r.falls ? `<span class="chip bad">摔倒</span>` : "",
+      stumbles && r.stumbles > r.falls ? `<span class="chip">绊 ${r.stumbles - r.falls}</span>` : "",
+      r.stalls ? `<span class="chip">呆 ${r.stalls}</span>` : "",
+    ].join("");
+  }
 
   overlay.addEventListener("click", (e) => {
     const act = (e.target as HTMLElement).closest<HTMLElement>("[data-act]")?.dataset.act;
@@ -250,12 +257,10 @@ export function startApp(root: HTMLElement): void {
     list.innerHTML = game.horses
       .map((h) => {
         const coat = coatFor(express(h.genome).coat);
-        const meta = [h.generation ? `第 ${h.generation} 代` : "初代", `${coat.name}马`, h.record.bestTrial ? `试跑 ${h.record.bestTrial.toFixed(0)} 米` : ""]
-          .filter(Boolean)
-          .join(" · ");
+        const meta = parts(h.generation ? `第 ${h.generation} 代` : "初代", `${coat.name}马`, h.record.bestTrial > 0 && `${h.record.bestTrial.toFixed(0)} 米`);
         return `<li><button class="horse-card ${h.id === game.selectedId ? "on" : ""}" data-id="${h.id}">
           <canvas class="mini" width="84" height="60"></canvas>
-          <span class="hc-text"><strong>${esc(h.name)}</strong><span>${meta}</span></span>
+          <span class="hc-text"><strong>${esc(h.name)}</strong>${meta}</span>
           ${h.record.wins ? `<span class="wins" title="平地赛冠军次数">${h.record.wins} 冠</span>` : ""}
         </button></li>`;
       })
@@ -281,10 +286,10 @@ export function startApp(root: HTMLElement): void {
 
   el(root, "#btn-wild").addEventListener("click", () => {
     const h = catchWild(game);
-    if (!h) return toast(`马厩满了（最多 ${STABLE_LIMIT} 匹），先放生一匹吧`);
+    if (!h) return toast("马厩满了");
     game.selectedId = h.id;
     persist();
-    toast(`套回来一匹野马，起名「${h.name}」`);
+    toast(`套到「${h.name}」`);
     refreshAll();
   });
 
@@ -292,8 +297,7 @@ export function startApp(root: HTMLElement): void {
     dialog.innerHTML = `
       <form method="dialog" class="dlg">
         <h3>导入马码</h3>
-        <p>朋友分享的马码长这样：TM2-XXXX-XXXX-XXXX-XXXX-X</p>
-        <input name="code" autocomplete="off" spellcheck="false" placeholder="粘贴马码" />
+        <input name="code" autocomplete="off" spellcheck="false" placeholder="TM2-XXXX-XXXX-XXXX-XXXX-X" />
         <p class="err" hidden></p>
         <div class="row"><button class="btn primary" value="ok">导入</button><button class="btn ghost" value="cancel" formnovalidate>取消</button></div>
       </form>`;
@@ -307,12 +311,12 @@ export function startApp(root: HTMLElement): void {
       if (res === "invalid" || res === "full") {
         e.preventDefault();
         err.hidden = false;
-        err.textContent = res === "full" ? `马厩满了（最多 ${STABLE_LIMIT} 匹）` : "马码不对，检查一下有没有抄错";
+        err.textContent = res === "full" ? "马厩满了" : "马码不对";
         return;
       }
       game.selectedId = res.id;
       persist();
-      toast(`「${res.name}」来到了你的马厩`);
+      toast(`「${res.name}」入厩`);
       refreshAll();
     });
     dialog.showModal();
@@ -356,11 +360,10 @@ export function startApp(root: HTMLElement): void {
             </div>`;
           }).join("")}
         </div>
-        <p class="note">每个位点两条链，小马从父母各继承一条。没有好基因，只有合适的基因。</p>`
+`
       : `<div class="unknown">
-          <p>基因型未知。外表只能看出个大概，同样长相的马，可能藏着完全不同的隐性基因。</p>
+          <span>基因型未知</span>
           <button class="btn primary" id="btn-seq">测序</button>
-          <p class="note">原型阶段测序免费；正式版要花钱、花时间。</p>
         </div>`;
 
     el<HTMLElement>(root, "#detail").innerHTML = `
@@ -368,28 +371,26 @@ export function startApp(root: HTMLElement): void {
         <canvas class="portrait" width="150" height="110"></canvas>
         <div>
           <h2>${esc(h.name)}</h2>
-          <p class="sub">${h.generation ? `第 ${h.generation} 代` : "初代"} · ${coat.name}马${h.parents ? ` · ${esc(h.parents[0])} × ${esc(h.parents[1])}` : ""}</p>
-          <p class="sub">体重 ${Math.round(plan.totalMass)} 公斤 · 肩高 ${(Math.max(plan.legFront, plan.legRear) + plan.torsoHeight * 0.3).toFixed(2)} 米</p>
+          <p class="sub">${parts(h.generation ? `第 ${h.generation} 代` : "初代", `${coat.name}马`, h.parents && `${esc(h.parents[0])} × ${esc(h.parents[1])}`)}</p>
+          <p class="sub">${parts(`${Math.round(plan.totalMass)} 公斤`, `肩高 ${(Math.max(plan.legFront, plan.legRear) + plan.torsoHeight * 0.3).toFixed(2)} 米`)}</p>
         </div>
       </div>
       <section>
-        <h3>估算属性 <span class="hint">真实成绩以物理模拟为准</span></h3>
+        <h3>属性</h3>
         ${bar("速度", stats.speed, "腿长、肌力、步频越高越快")}
         ${bar("稳定", stats.stability, "躯干厚、蹄宽越稳；腿长、头重容易翻")}
         ${bar("力量", stats.strength, "体型和肌力")}
         ${bar("耐力", stats.endurance, "体质；超出代谢预算会拖累")}
       </section>
       <section>
-        <h3>代谢预算 <span class="hint ${budget.over ? "warn" : ""}">${budget.used} / ${budget.cap}${budget.over ? ` · 超支 ${budget.over}` : ""}</span></h3>
+        <h3 title="体型、肌力、步频都吃预算，体质决定上限；超支的马体力掉得快">代谢预算 <span class="hint ${budget.over ? "warn" : ""}">${budget.used} / ${budget.cap}${budget.over ? `　超支 ${budget.over}` : ""}</span></h3>
         <div class="budget"><span class="budget-fill ${budget.over ? "over" : ""}" style="width:${budgetPct}%"></span><span class="budget-cap" style="left:${capPct}%"></span></div>
-        <p class="note">体型、肌力、步频都吃预算，体质决定上限。超支的马体力掉得快。</p>
       </section>
       <section>
-        <h3>嵌合槽 <span class="hint">${slots} 个 · 由相容度决定</span></h3>
+        <h3>嵌合槽</h3>
         <div class="slots">
           ${Array.from({ length: 4 }, (_, i) => `<span class="slot ${i < slots ? "open" : "locked"}">${i < slots ? "空" : "锁"}</span>`).join("")}
         </div>
-        <p class="note">部件（鹿角、蹼足、鸟翼……）在下一阶段开放，装上会占代谢预算、改物理身体。</p>
       </section>
       <section>
         <h3>基因</h3>
@@ -397,7 +398,17 @@ export function startApp(root: HTMLElement): void {
       </section>
       <section>
         <h3>成绩</h3>
-        <p class="record">试跑 ${h.record.trials} 次${h.record.bestTrial ? `，最远 ${h.record.bestTrial.toFixed(1)} 米` : ""} · 平地赛 ${h.record.races} 场 ${h.record.wins} 冠 · 摔倒 ${h.record.falls} 次</p>
+        <div class="record">
+          ${[
+            ["试跑", h.record.trials],
+            ["最远", h.record.bestTrial ? h.record.bestTrial.toFixed(1) : "—"],
+            ["比赛", h.record.races],
+            ["冠军", h.record.wins],
+            ["摔倒", h.record.falls],
+          ]
+            .map(([k, v]) => `<span class="rec"><b>${v}</b><small>${k}</small></span>`)
+            .join("")}
+        </div>
       </section>
       <section>
         <h3>繁育</h3>
@@ -408,11 +419,11 @@ export function startApp(root: HTMLElement): void {
                 <select id="mate">${others.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
                 <button class="btn" id="btn-breed">生一匹小马</button>
               </div>`
-            : `<p class="note">马厩里只有它一匹，先去套一匹野马。</p>`
+            : `<p class="note">需要第二匹马</p>`
         }
       </section>
       <section>
-        <h3>马码 <span class="hint">分享给朋友，对方导入就能得到同一匹马</span></h3>
+        <h3>马码</h3>
         <div class="row code"><code>${code}</code><button class="btn ghost" id="btn-copy">复制</button></div>
       </section>
       <section class="danger">
@@ -425,7 +436,7 @@ export function startApp(root: HTMLElement): void {
     root.querySelector("#btn-seq")?.addEventListener("click", () => {
       h.sequenced = true;
       persist();
-      toast(`「${h.name}」的基因型测出来了`);
+      toast("测序完成");
       renderDetail();
     });
     root.querySelector("#btn-copy")?.addEventListener("click", () => {
@@ -437,15 +448,15 @@ export function startApp(root: HTMLElement): void {
     root.querySelector("#btn-breed")?.addEventListener("click", () => {
       const mate = el<HTMLSelectElement>(root, "#mate").value;
       const foal = breedFoal(game, h.id, mate);
-      if (!foal) return toast(`马厩满了（最多 ${STABLE_LIMIT} 匹），先放生一匹吧`);
+      if (!foal) return toast("马厩满了");
       game.selectedId = foal.id;
       persist();
-      toast(foal.mutations.length ? `小马「${foal.name}」出生了，还带着突变！` : `小马「${foal.name}」出生了`);
+      toast(foal.mutations.length ? `「${foal.name}」出生，带突变！` : `「${foal.name}」出生`);
       refreshAll();
     });
     root.querySelector("#btn-release")?.addEventListener("click", () => {
-      if (game.horses.length <= 1) return toast("最后一匹马可不能放生");
-      if (!window.confirm(`确定放生「${h.name}」吗？放生之后就找不回来了（除非你记下了马码）。`)) return;
+      if (game.horses.length <= 1) return toast("最后一匹不能放生");
+      if (!window.confirm(`放生「${h.name}」？`)) return;
       releaseHorse(game, h.id);
       persist();
       refreshAll();
@@ -461,13 +472,13 @@ export function startApp(root: HTMLElement): void {
       .join("")}</div>`;
     let html = "";
     if (tab === "stable") {
-      html = `<p><strong>${esc(h.name)}</strong> 站在马厩前。去<button class="link" data-goto="trial">试跑场</button>看看它能跑多远，或者报名<button class="link" data-goto="race">平地赛</button>。</p>`;
+      html = `<strong class="bar-name">${esc(h.name)}</strong>
+        <button class="btn" data-goto="trial">${TAB_LABELS.trial}</button>
+        <button class="btn primary" data-goto="race">${TAB_LABELS.race}</button>`;
     } else if (tab === "trial") {
-      html = `<button class="btn primary" id="btn-go" ${running ? "disabled" : ""}>${running ? "试跑中…" : `让${esc(h.name)}跑 ${TRIAL_SECONDS} 秒`}</button>
-        <p>同一匹马每次的跑法会有一点不同：物理世界里，绊跤和发呆都是随机的。</p>${speedBtns}`;
+      html = `<button class="btn primary" id="btn-go" ${running ? "disabled" : ""}>${running ? "试跑中…" : `开跑 ${TRIAL_SECONDS} 秒`}</button>${speedBtns}`;
     } else {
-      html = `<button class="btn primary" id="btn-go" ${running ? "disabled" : ""}>${running ? "比赛中…" : `报名平地赛 · ${RACE_DISTANCE} 米`}</button>
-        <p>${esc(h.name)} 对阵 7 匹野马，先到终点者胜。</p>${speedBtns}`;
+      html = `<button class="btn primary" id="btn-go" ${running ? "disabled" : ""}>${running ? "比赛中…" : `出赛 ${RACE_DISTANCE} 米`}</button>${speedBtns}`;
     }
     const barEl = el<HTMLDivElement>(root, "#arena-bar");
     barEl.innerHTML = html;
@@ -489,7 +500,7 @@ export function startApp(root: HTMLElement): void {
   };
 
   el(root, "#btn-reset").addEventListener("click", () => {
-    if (!window.confirm("重开存档会清空马厩，回到最初的四匹马。确定吗？")) return;
+    if (!window.confirm("重开存档？马厩会清空。")) return;
     game = resetGame();
     stage.time = game.time;
     refreshAll();

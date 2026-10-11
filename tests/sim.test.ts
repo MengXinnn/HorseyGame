@@ -35,6 +35,40 @@ describe("物理比赛", () => {
     }
   });
 
+  it("摔倒的马趴在原地不再起来，只剩它一匹时比赛提前结束", () => {
+    const rng = createRng(31);
+    let endedEarly = 0;
+    for (let i = 0; i < 60; i++) {
+      const race = new Race([{ id: "a", name: "a", genome: randomGenome(rng, 0.4) }], { distance: 10_000, seed: i, timeLimit: 20 });
+      race.runToEnd();
+      const h = race.runners[0]!.horse;
+      expect(h.falls).toBeLessThanOrEqual(1);
+      if (h.falls) expect(h.state).toBe("fallen");
+      if (race.raceTime < 20) {
+        endedEarly++;
+        expect(h.downTime).toBeGreaterThanOrEqual(1.5);
+      }
+    }
+    expect(endedEarly).toBeGreaterThan(0);
+  });
+
+  it("跑起来蹄子落在身体下方，马不往前栽", () => {
+    const rng = createRng(5);
+    for (let i = 0; i < 8; i++) {
+      const race = new Race([{ id: "a", name: "a", genome: randomGenome(rng, 0.3) }], { distance: 10_000, seed: 1, timeLimit: 10 });
+      const h = race.runners[0]!.horse;
+      let slant = 0;
+      let n = 0;
+      while (!race.finished) {
+        race.step();
+        if (race.raceTime < 2 || h.state !== "running") continue;
+        for (const l of h.pose().legs) slant += Math.atan2(l.foot.x - l.hip.x, l.hip.y - l.foot.y);
+        n += 4;
+      }
+      if (n) expect(slant / n, `第 ${i} 匹`).toBeGreaterThan(-0.05);
+    }
+  });
+
   it("比赛名次按完赛时间，没完赛的按距离", () => {
     const race = new Race(field(3, 5), { distance: 40, seed: 8, timeLimit: 12 });
     const res = race.runToEnd();
