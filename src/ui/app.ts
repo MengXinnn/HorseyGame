@@ -57,6 +57,9 @@ import {
 import { BUILDINGS, INTERACTS, MAP_H, MAP_W, RING, type InteractId } from "../world/tiles";
 import { MAP_PX } from "../world/minimap";
 import { WorldScene } from "../world/world";
+import { regionAt } from "../world/tiles";
+import { themeFor } from "../audio/score";
+import { WorldMusic } from "../audio/worldMusic";
 import { drawPortrait } from "./portrait";
 import { drawDial, ico, installPixelUI } from "./pixelui";
 import { portraitURL } from "../world/sprites";
@@ -138,8 +141,8 @@ export function startApp(root: HTMLElement): void {
             </span>
           </button>
           <div class="cb-gold" id="h-money" title="钱"></div>
+          <div class="debt-note" id="h-debt"></div>
         </div>
-        <div class="debt-note" id="h-debt"></div>
         <div class="toolbar" id="toolbar"></div>
       </div>
       <div class="event-bar" id="event-bar" hidden>
@@ -198,6 +201,15 @@ export function startApp(root: HTMLElement): void {
       hud();
     },
   });
+  const music = new WorldMusic(() => toast("音乐暂时无法播放，可点击音乐开关重试"));
+  const updateMusic = (): void => {
+    music.update(themeFor(regionAt(game.player.x, game.player.z)?.id, world.clock), mode === "world" && !document.hidden);
+  };
+  // Browser autoplay policy: initialize/resume only after a real game gesture.
+  root.addEventListener("pointerdown", () => { updateMusic(); void music.unlock(); });
+  document.addEventListener("keydown", () => { updateMusic(); void music.unlock(); });
+  document.addEventListener("visibilitychange", updateMusic);
+  updateMusic();
   world.minimapCanvas = $<HTMLCanvasElement>("#mm-canvas");
   const stage = new Stage(raceCanvas);
   stage.active = false;
@@ -213,6 +225,7 @@ export function startApp(root: HTMLElement): void {
   };
   const clockLoop = (): void => {
     if (!world.settled) drawClock();
+    updateMusic();
     requestAnimationFrame(clockLoop);
   };
   requestAnimationFrame(clockLoop);
@@ -1180,15 +1193,48 @@ export function startApp(root: HTMLElement): void {
   /* ---------------- 菜单和开场 ---------------- */
 
   let confirmReset = false;
+  const openSettings = (): void => {
+    panel(
+      "设置",
+      `<div class="music-settings">
+        <div class="row music-toggle"><span>背景音乐</span>
+          <button class="btn wood" id="music-toggle" data-act="music" aria-label="背景音乐" aria-pressed="${music.enabled}" ${music.supported ? "" : "disabled"} title="${music.supported ? "" : "浏览器不支持背景音乐"}">${music.enabled ? "开启" : "关闭"}</button>
+        </div>
+        <label class="music-volume">音量 <output id="music-level">${Math.round(music.volume * 100)}%</output>
+          <input id="music-volume" type="range" min="0" max="100" value="${Math.round(music.volume * 100)}" aria-label="背景音乐音量" ${music.supported ? "" : "disabled"} />
+        </label>
+        <button class="btn wood big" data-act="back">返回</button>
+      </div>`,
+      {
+        music: () => {
+          music.setEnabled(!music.enabled);
+          const toggle = $("#music-toggle");
+          toggle.textContent = music.enabled ? "开启" : "关闭";
+          toggle.setAttribute("aria-pressed", String(music.enabled));
+        },
+        back: () => openMenu(),
+      },
+      { cls: "narrow" },
+    );
+    $<HTMLInputElement>("#music-volume").addEventListener("input", (event) => {
+      music.setVolume(Number((event.target as HTMLInputElement).value) / 100);
+      $("#music-level").textContent = `${Math.round(music.volume * 100)}%`;
+    });
+  };
   const openMenu = (): void => {
     panel(
       "",
       `<div class="menu">
         <button class="btn big" data-act="close">继续</button>
+        <button class="btn wood big" data-act="settings">设置</button>
         <button class="btn wood big" data-act="keys">操作</button>
         <button class="btn wood big${confirmReset ? " danger" : ""}" data-act="reset">${confirmReset ? "真的重开" : "重开"}</button>
       </div>`,
       {
+        settings: () => {
+          confirmReset = false;
+          openSettings();
+        },
         keys: () => {
           closePanel();
           toast(HOW_TO, 5000);
