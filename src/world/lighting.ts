@@ -3,7 +3,7 @@
  * - 光照贴图：先铺一层环境光（白天白、傍晚橙、夜里深蓝），再把每盏灯「加」上去，
  *   最后整张乘到画面上——灯照到的地方露出本来的颜色，照不到的沉进夜色里。
  *   灯的光晕不是平滑渐变，而是一圈圈分层、用 Bayer 抖动过渡的像素光。
- * - 清晨和傍晚斜斜几道光柱。
+ * - 白天：云影慢慢飘过地面；清晨和傍晚斜斜几道光柱。
  * - 夜里画面四角压暗一点（暗角）。
  */
 import { mix } from "../render/color";
@@ -28,6 +28,8 @@ export interface Ambient {
   night: number;
   /** 0..1：清晨、傍晚的暖光（光柱）。 */
   golden: number;
+  /** 0..1：白天云影的浓淡。 */
+  day: number;
 }
 
 /** 一天里的环境光：清晨偏粉，傍晚偏橙，夜里深蓝。 */
@@ -52,11 +54,11 @@ export function ambientAt(clock: number): Ambient {
     if (c <= b[0]) {
       const t = (c - a[0]) / (b[0] - a[0]);
       const night = a[2] + (b[2] - a[2]) * t;
-      return { color: mix(a[1], b[1], t), night, golden: a[3] + (b[3] - a[3]) * t };
+      return { color: mix(a[1], b[1], t), night, golden: a[3] + (b[3] - a[3]) * t, day: Math.max(0, 1 - night * 2.2) };
     }
   }
   const last = keys[keys.length - 1]!;
-  return { color: last[1], night: last[2], golden: 0 };
+  return { color: last[1], night: last[2], golden: 0, day: 0 };
 }
 
 /* ---------------- 像素光晕 ---------------- */
@@ -89,7 +91,51 @@ export function lightSprite(r: number, color: string): HTMLCanvasElement {
   return c;
 }
 
-/* ---------------- 光柱 ---------------- */
+/* ---------------- 云影和光柱 ---------------- */
+
+/** 能无缝平铺的值噪声。 */
+function tileNoise(size: number, cell: number, seed: number): (x: number, y: number) => number {
+  const n = Math.round(size / cell);
+  const v = new Float32Array(n * n);
+  let s = seed;
+  for (let i = 0; i < v.length; i++) {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    v[i] = s / 4294967296;
+  }
+  return (x, y) => {
+    const gx = x / cell;
+    const gy = y / cell;
+    const ix = Math.floor(gx);
+    const iy = Math.floor(gy);
+    const fx = (gx - ix) * (gx - ix) * (3 - 2 * (gx - ix));
+    const fy = (gy - iy) * (gy - iy) * (3 - 2 * (gy - iy));
+    const at = (a: number, b: number): number => v[((b % n) + n) % n * n + (((a % n) + n) % n)]!;
+    const a = at(ix, iy);
+    const b = at(ix + 1, iy);
+    const c = at(ix, iy + 1);
+    const d = at(ix + 1, iy + 1);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+  };
+}
+
+function cloudTexture(): HTMLCanvasElement {
+  const size = 512;
+  const big = tileNoise(size, 128, 7);
+  const mid = tileNoise(size, 64, 13);
+  const small = tileNoise(size, 16, 29);
+  const ras = new Raster(size, size);
+  const shadow = rgb("#14283c");
+  for (let y = 0; y < size; y++)
+    for (let x = 0; x < size; x++) {
+      const n = big(x, y) * 0.6 + mid(x, y) * 0.3 + small(x, y) * 0.1;
+      // 只留下最浓的几片（大约一成多的地面），边缘窄窄地抖一圈。
+      const k = (n - 0.72) / 0.06 + (bayer(x, y) - 0.5) * 0.5;
+      if (k <= 0) continue;
+      const a = k > 1 ? 0.13 : 0.07;
+      ras.data[y * size + x] = ((Math.round(a * 255) << 24) | (shadow & 0xffffff)) >>> 0;
+    }
+  return ras.toCanvas();
+}
 
 function rayTexture(): HTMLCanvasElement {
   const w = 384;
@@ -125,12 +171,28 @@ function rayTexture(): HTMLCanvasElement {
 export class Lighting {
   private readonly map: HTMLCanvasElement;
   private readonly mctx: Ctx;
+  private clouds: CanvasPattern | null = null;
   private rays: CanvasPattern | null = null;
   private vignette: HTMLCanvasElement | null = null;
 
   constructor() {
     this.map = document.createElement("canvas");
     this.mctx = this.map.getContext("2d") as Ctx;
+  }
+
+  /** 白天的云影：跟着地面走（世界坐标），再被风吹着慢慢挪。 */
+  drawClouds(b: Ctx, cx: number, cy: number, bw: number, bh: number, time: number, amb: Ambient): void {
+    if (amb.day <= 0.02) return;
+    if (!this.clouds) this.clouds = b.createPattern(cloudTexture(), "repeat");
+    const pat = this.clouds;
+    if (!pat) return;
+    const ox = Math.round(-cx - time * 7);
+    const oy = Math.round(-cy - time * 3);
+    pat.setTransform(new DOMMatrix([1, 0, 0, 1, ox, oy]));
+    b.globalAlpha = Math.min(1, amb.day);
+    b.fillStyle = pat;
+    b.fillRect(0, 0, bw, bh);
+    b.globalAlpha = 1;
   }
 
   /** 清晨、傍晚斜斜的光柱，加在画面上。 */
