@@ -329,6 +329,18 @@ canvas,
   pointer-events: auto;
 }
 
+.music-volume {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: calc(var(--u) * 2);
+}
+
+.music-volume input {
+  width: 100%;
+  accent-color: #a76a38;
+}
+
 .clockbox {
   position: absolute;
   top: calc(var(--u) * 3);

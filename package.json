@@ -5,6 +5,7 @@
   "type": "module",
   "description": "天马行空：物理驱动的育马沙盒网页游戏",
   "scripts": {
+    "music:render": "node scripts/render-music.mjs",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
@@ -17,6 +18,7 @@
     "planck": "^1.5.0"
   },
   "devDependencies": {
+    "esbuild": "^0.28.2",
     "typescript": "^5.9.3",
     "vite": "^7.3.7",
     "vitest": "^4.1.11"
