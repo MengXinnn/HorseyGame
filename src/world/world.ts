@@ -881,8 +881,7 @@ export class WorldScene {
     for (const it of items) it.draw();
     this.ambient.drawAbove(b, view);
 
-    // 白天云影飘过；之后整张乘上光照贴图，夜里点灯、窗户发光，再加一圈辉光。
-    this.lighting.drawClouds(b, cx, cy, bw, bh, t, amb);
+    // 整张乘上光照贴图，夜里点灯、窗户发光，再加一圈辉光。
     if (amb.night > 0.05) lights.push({ x: px - cx, y: pz - cy - 8, r: 44, color: "#ffe0b0", power: 0.4 });
     if (this.lighting.apply(b, bw, bh, lights, amb) && amb.night > 0.05) {
       for (const g of glows) g();
