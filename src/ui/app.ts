@@ -141,9 +141,8 @@ export function startApp(root: HTMLElement): void {
             </span>
           </button>
           <div class="cb-gold" id="h-money" title="钱"></div>
-          <button class="chip-btn" id="b-music" aria-label="关闭背景音乐" aria-pressed="true">乐</button>
+          <div class="debt-note" id="h-debt"></div>
         </div>
-        <div class="debt-note" id="h-debt"></div>
         <div class="toolbar" id="toolbar"></div>
       </div>
       <div class="event-bar" id="event-bar" hidden>
@@ -203,26 +202,9 @@ export function startApp(root: HTMLElement): void {
     },
   });
   const music = new WorldMusic(() => toast("音乐暂时无法播放，可点击音乐开关重试"));
-  const musicButton = $<HTMLButtonElement>("#b-music");
-  let musicButtonKey = "";
-  const refreshMusicButton = (): void => {
-    const key = `${music.enabled}:${music.title}`;
-    if (key === musicButtonKey) return;
-    musicButtonKey = key;
-    musicButton.textContent = music.enabled ? "乐" : "静";
-    musicButton.setAttribute("aria-pressed", String(music.enabled));
-    musicButton.setAttribute("aria-label", music.enabled ? "关闭背景音乐" : "开启背景音乐");
-    musicButton.title = music.supported ? `${music.title}　${music.enabled ? "关闭音乐" : "开启音乐"}` : "浏览器不支持背景音乐";
-    musicButton.disabled = !music.supported;
-  };
   const updateMusic = (): void => {
     music.update(themeFor(regionAt(game.player.x, game.player.z)?.id, world.clock), mode === "world" && !document.hidden);
-    refreshMusicButton();
   };
-  musicButton.addEventListener("click", () => {
-    music.setEnabled(!music.enabled);
-    refreshMusicButton();
-  });
   // Browser autoplay policy: initialize/resume only after a real game gesture.
   root.addEventListener("pointerdown", () => { updateMusic(); void music.unlock(); });
   document.addEventListener("keydown", () => { updateMusic(); void music.unlock(); });
@@ -1211,18 +1193,48 @@ export function startApp(root: HTMLElement): void {
   /* ---------------- 菜单和开场 ---------------- */
 
   let confirmReset = false;
+  const openSettings = (): void => {
+    panel(
+      "设置",
+      `<div class="music-settings">
+        <div class="row music-toggle"><span>背景音乐</span>
+          <button class="btn wood" id="music-toggle" data-act="music" aria-label="背景音乐" aria-pressed="${music.enabled}" ${music.supported ? "" : "disabled"} title="${music.supported ? "" : "浏览器不支持背景音乐"}">${music.enabled ? "开启" : "关闭"}</button>
+        </div>
+        <label class="music-volume">音量 <output id="music-level">${Math.round(music.volume * 100)}%</output>
+          <input id="music-volume" type="range" min="0" max="100" value="${Math.round(music.volume * 100)}" aria-label="背景音乐音量" ${music.supported ? "" : "disabled"} />
+        </label>
+        <button class="btn wood big" data-act="back">返回</button>
+      </div>`,
+      {
+        music: () => {
+          music.setEnabled(!music.enabled);
+          const toggle = $("#music-toggle");
+          toggle.textContent = music.enabled ? "开启" : "关闭";
+          toggle.setAttribute("aria-pressed", String(music.enabled));
+        },
+        back: () => openMenu(),
+      },
+      { cls: "narrow" },
+    );
+    $<HTMLInputElement>("#music-volume").addEventListener("input", (event) => {
+      music.setVolume(Number((event.target as HTMLInputElement).value) / 100);
+      $("#music-level").textContent = `${Math.round(music.volume * 100)}%`;
+    });
+  };
   const openMenu = (): void => {
     panel(
       "",
       `<div class="menu">
         <button class="btn big" data-act="close">继续</button>
-        <label class="music-volume">音乐 <output id="music-level">${Math.round(music.volume * 100)}%</output>
-          <input id="music-volume" type="range" min="0" max="100" value="${Math.round(music.volume * 100)}" aria-label="背景音乐音量" />
-        </label>
+        <button class="btn wood big" data-act="settings">设置</button>
         <button class="btn wood big" data-act="keys">操作</button>
         <button class="btn wood big${confirmReset ? " danger" : ""}" data-act="reset">${confirmReset ? "真的重开" : "重开"}</button>
       </div>`,
       {
+        settings: () => {
+          confirmReset = false;
+          openSettings();
+        },
         keys: () => {
           closePanel();
           toast(HOW_TO, 5000);
@@ -1242,10 +1254,6 @@ export function startApp(root: HTMLElement): void {
       },
       { cls: "narrow", onClose: () => (confirmReset = false) },
     );
-    $<HTMLInputElement>("#music-volume").addEventListener("input", (event) => {
-      music.setVolume(Number((event.target as HTMLInputElement).value) / 100);
-      $("#music-level").textContent = `${Math.round(music.volume * 100)}%`;
-    });
   };
 
   /** 新手提示只在开场信之后说一句。 */

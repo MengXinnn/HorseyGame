@@ -1,8 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderTheme, score, THEMES, themeFor, type Theme } from "../src/audio/score";
-import { WorldMusic } from "../src/audio/worldMusic";
+import { CROSSFADE_SECONDS, fadeCurve, WorldMusic } from "../src/audio/worldMusic";
 
 describe("大世界配乐", () => {
+  it("六秒的淡入淡出保持等功率，曲线首尾平缓", () => {
+    expect(CROSSFADE_SECONDS).toBe(6);
+    const incoming = fadeCurve(true);
+    const outgoing = fadeCurve(false);
+    expect(incoming[0]).toBe(0);
+    expect(incoming[128]).toBe(1);
+    for (let i = 0; i < 129; i++) expect(incoming[i]! ** 2 + outgoing[i]! ** 2).toBeCloseTo(1, 6);
+    expect(incoming[1]! - incoming[0]!).toBeLessThan(0.001);
+    expect(outgoing[127]! - outgoing[128]!).toBeLessThan(0.001);
+  });
   it("夜晚覆盖各区域，白天匹配牧场、城镇和野原", () => {
     expect(themeFor("ranch", 360)).toBe("ranch");
     expect(themeFor(undefined, 800)).toBe("ranch");
@@ -39,7 +49,7 @@ describe("大世界配乐", () => {
 });
 
 class FakeGain {
-  gain = { value: 0, cancelAndHoldAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), setValueAtTime: vi.fn(), setTargetAtTime: vi.fn() };
+  gain = { value: 0, cancelAndHoldAtTime: vi.fn(), setValueCurveAtTime: vi.fn(), setValueAtTime: vi.fn(), setTargetAtTime: vi.fn() };
   connect = vi.fn();
   disconnect = vi.fn();
 }
@@ -91,11 +101,13 @@ describe("音乐播放生命周期", () => {
     expect(context.sources[0]!.loop).toBe(true);
     music.update("town", true);
     expect(context.sources).toHaveLength(1);
+    context.currentTime = 3;
     music.update("wilds", true);
     await flush();
     expect(context.sources).toHaveLength(2);
-    expect(context.sources[0]!.stop).toHaveBeenCalledWith(1.6);
-    expect(context.gains[1]!.gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, 1.5);
+    expect(context.sources[0]!.stop).toHaveBeenCalledWith(9.1);
+    expect(context.gains[1]!.gain.setValueCurveAtTime).toHaveBeenLastCalledWith(fadeCurve(false), 3, 6);
+    expect(context.gains[2]!.gain.setValueCurveAtTime).toHaveBeenCalledWith(fadeCurve(true), 3, 6);
   });
 
   it("静音和离开大世界停止音乐，返回复用缓存；保存音量和开关", async () => {
@@ -133,6 +145,31 @@ describe("音乐播放生命周期", () => {
     expect(FakeContext.instances[0]!.sources).toHaveLength(1);
   });
 
+  it("首次加载中关闭再开启，无需新的手势也会恢复播放", async () => {
+    let resolve!: (value: ArrayBuffer) => void;
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, arrayBuffer: () => new Promise<ArrayBuffer>((r) => { resolve = r; }) })));
+    const music = new WorldMusic(vi.fn());
+    const loading = music.unlock();
+    await flush();
+    music.setEnabled(false);
+    music.setEnabled(true);
+    resolve(new ArrayBuffer(1));
+    await loading;
+    await flush();
+    expect(FakeContext.instances[0]!.sources).toHaveLength(1);
+  });
+
+  it("换曲加载失败时淡出旧曲", async () => {
+    const error = vi.fn();
+    const music = new WorldMusic(error);
+    await music.unlock();
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: false } as Response);
+    music.update("town", true);
+    await flush();
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(FakeContext.instances[0]!.sources[0]!.stop).toHaveBeenCalled();
+  });
+
   it("快速跨区域时只播放最后的区域", async () => {
     const music = new WorldMusic(vi.fn());
     await music.unlock();
@@ -142,6 +179,18 @@ describe("音乐播放生命周期", () => {
     await flush();
     expect(FakeContext.instances[0]!.sources).toHaveLength(2);
     expect(music.title).toBe("月落河湾");
+  });
+
+  it("切换中静音会同时收掉旧曲和新曲，避免旧曲继续响六秒", async () => {
+    const music = new WorldMusic(vi.fn());
+    await music.unlock();
+    const context = FakeContext.instances[0]!;
+    context.currentTime = 3;
+    music.update("town", true);
+    await flush();
+    context.currentTime = 4;
+    music.setEnabled(false);
+    for (const source of context.sources) expect(source.stop).toHaveBeenLastCalledWith(4.5);
   });
 
   it("加载失败只提示一次，开关重试可以恢复", async () => {

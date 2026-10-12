@@ -1,7 +1,17 @@
 import { THEMES, type Theme } from "./score";
 
 const SETTINGS_KEY = "tianma:music";
-interface Playing { source: AudioBufferSourceNode; gain: GainNode }
+interface Playing { source: AudioBufferSourceNode; gain: GainNode; started: number; fadeDuration: number }
+
+export const CROSSFADE_SECONDS = 6;
+/** Complementary equal-power curves, eased at both ends to avoid abrupt changes. */
+export function fadeCurve(incoming: boolean, level = 1): Float32Array {
+  return Float32Array.from({ length: 129 }, (_, i) => {
+    const t = i / 128;
+    const angle = t * t * (3 - 2 * t) * Math.PI / 2;
+    return level * (incoming ? Math.sin(angle) : Math.cos(angle));
+  });
+}
 
 /** Gesture-unlocked, gapless loops with crossfades; only the active theme is decoded. */
 export class WorldMusic {
@@ -12,6 +22,7 @@ export class WorldMusic {
   private master?: GainNode;
   private buffers = new Map<Theme, Promise<AudioBuffer>>();
   private playing?: Playing;
+  private retiring = new Map<Playing, { started: number; duration: number; level: number }>();
   private current?: Theme;
   private desired: Theme = "ranch";
   private active = true;
@@ -46,7 +57,11 @@ export class WorldMusic {
       if (this.context.state === "suspended") await this.context.resume();
       await this.sync();
     } catch { this.reportError(); }
-    finally { this.unlocking = false; }
+    finally {
+      this.unlocking = false;
+      // A mute/unmute or region change may have invalidated the initial load.
+      if (this.enabled && this.active && !this.failed) void this.sync();
+    }
   }
 
   update(theme: Theme, active: boolean): void {
@@ -76,22 +91,34 @@ export class WorldMusic {
     catch { /* Private browsing/full storage: keep session preferences. */ }
   }
 
-  private fadeOut(): void {
-    if (!this.playing || !this.context) return;
-    const { source, gain } = this.playing;
-    const now = this.context.currentTime;
-    gain.gain.cancelAndHoldAtTime(now);
-    gain.gain.linearRampToValueAtTime(0, now + 1.5);
-    source.stop(now + 1.6);
+  private fadeOut(duration = 1.5): void {
+    // Rapid boundary crossings must not accumulate long-lived outgoing tracks.
+    for (const previous of this.retiring.keys()) this.release(previous, Math.min(duration, 1.5));
+    if (!this.playing) return;
+    this.release(this.playing, duration);
     this.playing = undefined;
     this.current = undefined;
+  }
+
+  private release(playing: Playing, duration: number): void {
+    if (!this.context) return;
+    const { source, gain, started, fadeDuration } = playing;
+    const now = this.context.currentTime;
+    const previous = this.retiring.get(playing);
+    const t = Math.min(1, Math.max(0, (now - (previous?.started ?? started)) / (previous?.duration ?? fadeDuration)));
+    const angle = t * t * (3 - 2 * t) * Math.PI / 2;
+    const level = previous ? previous.level * Math.cos(angle) : Math.sin(angle);
+    gain.gain.cancelAndHoldAtTime(now);
+    gain.gain.setValueCurveAtTime(fadeCurve(false, level), now, duration);
+    source.stop(now + duration + 0.1);
+    this.retiring.set(playing, { started: now, duration, level });
   }
 
   private async sync(): Promise<void> {
     const revision = ++this.revision;
     const context = this.context;
     if (!context || !this.master) return;
-    if (!this.enabled || !this.active) { this.fadeOut(); return; }
+    if (!this.enabled || !this.active) { this.fadeOut(this.enabled ? 1.5 : 0.4); return; }
     if (context.state !== "running" || this.current === this.desired || this.failed) return;
     const theme = this.desired;
     try {
@@ -108,7 +135,8 @@ export class WorldMusic {
       }
       const buffer = await pending;
       if (revision !== this.revision || context.state !== "running") return;
-      this.fadeOut();
+      const fadeDuration = this.playing ? CROSSFADE_SECONDS : 2;
+      this.fadeOut(CROSSFADE_SECONDS);
       const source = context.createBufferSource();
       const gain = context.createGain();
       source.buffer = buffer;
@@ -117,10 +145,11 @@ export class WorldMusic {
       gain.connect(this.master);
       const now = context.currentTime;
       gain.gain.setValueAtTime(0, now);
-      gain.gain.linearRampToValueAtTime(1, now + 1.5);
-      source.onended = () => { source.disconnect(); gain.disconnect(); };
+      gain.gain.setValueCurveAtTime(fadeCurve(true), now, fadeDuration);
+      const playing = { source, gain, started: now, fadeDuration };
+      source.onended = () => { source.disconnect(); gain.disconnect(); this.retiring.delete(playing); };
       source.start(now);
-      this.playing = { source, gain };
+      this.playing = playing;
       this.current = theme;
     } catch {
       if (revision === this.revision) this.reportError();
@@ -129,6 +158,7 @@ export class WorldMusic {
 
   private reportError(): void {
     if (this.failed) return;
+    this.fadeOut();
     this.failed = true;
     this.onError();
   }

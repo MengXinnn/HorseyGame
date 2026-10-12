@@ -329,6 +329,15 @@ canvas,
   pointer-events: auto;
 }
 
+.music-settings {
+  display: grid;
+  gap: calc(var(--u) * 5);
+}
+
+.music-toggle {
+  justify-content: space-between;
+}
+
 .music-volume {
   display: flex;
   flex-wrap: wrap;
@@ -481,9 +490,8 @@ canvas,
 }
 
 .debt-note {
-  position: absolute;
-  top: calc(var(--u) * 74);
-  right: calc(var(--u) * 4);
+  align-self: flex-end;
+  margin-top: calc(var(--u) * 2);
   display: flex;
   align-items: center;
   gap: calc(var(--u) * 2);
