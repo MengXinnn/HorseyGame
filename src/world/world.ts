@@ -889,7 +889,6 @@ export class WorldScene {
       b.globalAlpha = 1;
       this.lighting.bloom(b, cores, amb);
     }
-    this.lighting.drawRays(b, cx, bw, bh, t, amb);
     this.ambient.drawNight(b, view, amb.night);
 
     this.drawOverlay(b, cx, cy, bw, bh);

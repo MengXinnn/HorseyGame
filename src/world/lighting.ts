@@ -3,7 +3,7 @@
  * - 光照贴图：先铺一层环境光（白天白、傍晚橙、夜里深蓝），再把每盏灯「加」上去，
  *   最后整张乘到画面上——灯照到的地方露出本来的颜色，照不到的沉进夜色里。
  *   灯的光晕不是平滑渐变，而是一圈圈分层、用 Bayer 抖动过渡的像素光。
- * - 白天：云影慢慢飘过地面；清晨和傍晚斜斜几道光柱。
+ * - 白天：云影慢慢飘过地面。
  * - 夜里画面四角压暗一点（暗角）。
  */
 import { mix } from "../render/color";
@@ -26,8 +26,6 @@ export interface Ambient {
   color: string;
   /** 0 白天 … 1 深夜：灯开多亮。 */
   night: number;
-  /** 0..1：清晨、傍晚的暖光（光柱）。 */
-  golden: number;
   /** 0..1：白天云影的浓淡。 */
   day: number;
 }
@@ -35,17 +33,17 @@ export interface Ambient {
 /** 一天里的环境光：清晨偏粉，傍晚偏橙，夜里深蓝。 */
 export function ambientAt(clock: number): Ambient {
   const h = clock / 60;
-  const keys: Array<[number, string, number, number]> = [
-    [4.5, "#2e3a78", 1, 0],
-    [6, "#c8a0b8", 0.45, 0.8],
-    [7.2, "#ffe6d8", 0.05, 1],
-    [9, "#ffffff", 0, 0.2],
-    [15.5, "#ffffff", 0, 0.1],
-    [17.2, "#ffd8a8", 0.05, 0.9],
-    [18.6, "#dc9a86", 0.4, 1],
-    [19.8, "#6a5a96", 0.8, 0.3],
-    [21, "#36427e", 1, 0],
-    [24, "#2c3670", 1, 0],
+  const keys: Array<[number, string, number]> = [
+    [4.5, "#2e3a78", 1],
+    [6, "#c8a0b8", 0.45],
+    [7.2, "#ffe6d8", 0.05],
+    [9, "#ffffff", 0],
+    [15.5, "#ffffff", 0],
+    [17.2, "#ffd8a8", 0.05],
+    [18.6, "#dc9a86", 0.4],
+    [19.8, "#6a5a96", 0.8],
+    [21, "#36427e", 1],
+    [24, "#2c3670", 1],
   ];
   const c = Math.max(keys[0]![0], Math.min(keys[keys.length - 1]![0], h));
   for (let i = 0; i < keys.length - 1; i++) {
@@ -54,11 +52,11 @@ export function ambientAt(clock: number): Ambient {
     if (c <= b[0]) {
       const t = (c - a[0]) / (b[0] - a[0]);
       const night = a[2] + (b[2] - a[2]) * t;
-      return { color: mix(a[1], b[1], t), night, golden: a[3] + (b[3] - a[3]) * t, day: Math.max(0, 1 - night * 2.2) };
+      return { color: mix(a[1], b[1], t), night, day: Math.max(0, 1 - night * 2.2) };
     }
   }
   const last = keys[keys.length - 1]!;
-  return { color: last[1], night: last[2], golden: 0, day: 0 };
+  return { color: last[1], night: last[2], day: 0 };
 }
 
 /* ---------------- 像素光晕 ---------------- */
@@ -91,7 +89,7 @@ export function lightSprite(r: number, color: string): HTMLCanvasElement {
   return c;
 }
 
-/* ---------------- 云影和光柱 ---------------- */
+/* ---------------- 云影 ---------------- */
 
 /** 能无缝平铺的值噪声。 */
 function tileNoise(size: number, cell: number, seed: number): (x: number, y: number) => number {
@@ -137,42 +135,12 @@ function cloudTexture(): HTMLCanvasElement {
   return ras.toCanvas();
 }
 
-function rayTexture(): HTMLCanvasElement {
-  const w = 384;
-  const h = 256;
-  const ras = new Raster(w, h);
-  const beams = [
-    [20, 18, 0.5],
-    [70, 34, 0.35],
-    [150, 12, 0.6],
-    [200, 26, 0.3],
-    [290, 40, 0.45],
-    [350, 14, 0.4],
-  ];
-  for (let y = 0; y < h; y++)
-    for (let x = 0; x < w; x++) {
-      // 光柱从左上斜下来，越往下越淡。
-      const u = (((x + y * 0.55) % w) + w) % w;
-      let k = 0;
-      for (const [x0, bw, p] of beams) {
-        const d = Math.abs(u - x0!) / bw!;
-        if (d < 1) k = Math.max(k, (1 - d) * p!);
-      }
-      k *= 1 - y / h;
-      const q = Math.floor(k * 3 + bayer(x, y)) / 3;
-      if (q <= 0) continue;
-      ras.data[y * w + x] = ((Math.round(q * 70) << 24) | (rgb("#ffd8a0") & 0xffffff)) >>> 0;
-    }
-  return ras.toCanvas();
-}
-
 /* ---------------- 合成 ---------------- */
 
 export class Lighting {
   private readonly map: HTMLCanvasElement;
   private readonly mctx: Ctx;
   private clouds: CanvasPattern | null = null;
-  private rays: CanvasPattern | null = null;
   private vignette: HTMLCanvasElement | null = null;
 
   constructor() {
@@ -193,21 +161,6 @@ export class Lighting {
     b.fillStyle = pat;
     b.fillRect(0, 0, bw, bh);
     b.globalAlpha = 1;
-  }
-
-  /** 清晨、傍晚斜斜的光柱，加在画面上。 */
-  drawRays(b: Ctx, cx: number, bw: number, bh: number, time: number, amb: Ambient): void {
-    if (amb.golden <= 0.05) return;
-    if (!this.rays) this.rays = b.createPattern(rayTexture(), "repeat-x");
-    const pat = this.rays;
-    if (!pat) return;
-    pat.setTransform(new DOMMatrix([1, 0, 0, Math.max(1, bh / 256), Math.round(-cx * 0.3 + time * 2), 0]));
-    b.globalCompositeOperation = "lighter";
-    b.globalAlpha = amb.golden * 0.55;
-    b.fillStyle = pat;
-    b.fillRect(0, 0, bw, bh);
-    b.globalAlpha = 1;
-    b.globalCompositeOperation = "source-over";
   }
 
   private vignetteFor(bw: number, bh: number): HTMLCanvasElement {
