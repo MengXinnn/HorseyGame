@@ -100,7 +100,7 @@ export class HorsePuppet {
    * 画成像素小马：先在一张小画布上画出物理姿态，描一圈深色轮廓，
    * 再贴到 (sx, sy)（脚底中心）。返回贴图占的矩形，用来点选。
    */
-  drawPixel(ctx: CanvasRenderingContext2D, sx: number, sy: number, ppm: number): { x: number; y: number; w: number; h: number; bubble: HorseBubble | null } {
+  drawPixel(ctx: CanvasRenderingContext2D, sx: number, sy: number, ppm: number, drawSprite?: (img: HTMLCanvasElement, x: number, y: number) => void): { x: number; y: number; w: number; h: number; bubble: HorseBubble | null } {
     const plan = this.plan;
     const k = ppm * this.scale;
     const w = Math.ceil((plan.torsoLength + plan.neckLength + plan.tailLength + 1.4) * k) + 6;
@@ -118,7 +118,8 @@ export class HorsePuppet {
       ctx.translate(Math.round(sx) * 2, 0);
       ctx.scale(-1, 1);
     }
-    ctx.drawImage(this.buf, x, y);
+    if (drawSprite) drawSprite(this.buf, x, y);
+    else ctx.drawImage(this.buf, x, y);
     ctx.restore();
     // 气泡换到外面的坐标；朝左时整张图绕 sx 翻了过去。
     const bubble = b && { text: b.text, x: this.facing < 0 ? Math.round(sx) * 2 - (x + b.x) : x + b.x, y: y + b.y };

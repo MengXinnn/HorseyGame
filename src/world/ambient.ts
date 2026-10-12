@@ -5,6 +5,7 @@
 import { buildingSprite } from "./buildingArt";
 import { BUILDINGS, CHICKEN_PEN, POND, T, TILE, tileAt, type Building } from "./tiles";
 import { canvas, outline, personFrame, type Dir, type PersonLook } from "./sprites";
+import type { Sunlight } from "./sunlight";
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -386,12 +387,13 @@ export class Ambient {
   }
 
   /** 和人、树一起按 y 排序的东西：鸡、鸭、行人。 */
-  collect(items: Drawable[], b: Ctx, view: View, shadow: (b: Ctx, x: number, y: number, r: number) => void): void {
+  collect(items: Drawable[], b: Ctx, view: View, shadow: (b: Ctx, x: number, y: number, r: number) => void, sunlight: Sunlight): void {
     const { cx, cy, bw, bh } = view;
     const vis = (x: number, y: number): boolean => x > cx - 30 && x < cx + bw + 30 && y > cy - 30 && y < cy + bh + 40;
     for (const c of this.roost ? [] : this.chickens) {
       const x = c.x * TILE;
       const y = c.z * TILE;
+      sunlight.castActor(x, y, 2, 10);
       if (!vis(x, y)) continue;
       const moving = Math.hypot(c.tx - c.x, c.tz - c.z) > 0.1 && c.wait <= 0;
       const frame = moving ? Math.floor(c.phase * 8) % 2 : Math.floor(c.phase * 1.3) % 3 === 0 ? 2 : 0;
@@ -400,7 +402,7 @@ export class Ambient {
         y,
         draw: () => {
           shadow(b, x - cx, y - cy, 3);
-          drawFlipped(b, img, Math.round(x - cx - 7), Math.round(y - cy - 13), c.facing);
+          drawFlipped(b, sunlight.sprite(img, x, y, 7, 13, "", c.facing < 0), Math.round(x - cx - 7), Math.round(y - cy - 13), c.facing);
         },
       });
     }
@@ -421,13 +423,14 @@ export class Ambient {
     for (const w of this.walkers) {
       const x = w.x * TILE;
       const y = w.z * TILE;
+      sunlight.castActor(x, y, 4, 23);
       if (!vis(x, y)) continue;
       const frame = w.wait > 0 ? 0 : Math.floor(w.phase) % 4;
       items.push({
         y,
         draw: () => {
           shadow(b, x - cx, y - cy, 5);
-          b.drawImage(personFrame(w.look, w.dir, frame), Math.round(x - 9 - cx), Math.round(y - 26 - cy));
+          sunlight.drawSprite(b, personFrame(w.look, w.dir, frame), Math.round(x - 9 - cx), Math.round(y - 26 - cy), x, y, 9, 26);
         },
       });
     }

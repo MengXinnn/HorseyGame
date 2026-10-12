@@ -31,11 +31,12 @@ import {
 import { banner, bubble, floatText, nameTag, signText, thinkBubble } from "./labels";
 import { bakeGround, canvas, icon, personFrame, PLAYER_LOOK, type Dir, type PersonLook } from "./sprites";
 import { propSprite } from "./props";
-import { bakeBuildingShadows, buildingSprite } from "./buildingArt";
+import { buildingHeight, buildingSprite } from "./buildingArt";
 import { HorsePuppet } from "./puppet";
 import { Ambient } from "./ambient";
 import { ambientAt, Lighting, type Light } from "./lighting";
 import { Minimap, type MapMarks } from "./minimap";
+import { boxFootprint, roundFootprint, Sunlight, type SunCaster } from "./sunlight";
 
 export interface WorldHooks {
   onInteract(id: InteractId): void;
@@ -185,6 +186,7 @@ export class WorldScene {
   private zoom = 3;
   private readonly ambient = new Ambient();
   private readonly lighting = new Lighting();
+  private readonly sunlight = new Sunlight(sunCasters());
   readonly minimap: Minimap;
   /** 角落里的小地图画布（界面给的）。 */
   minimapCanvas: HTMLCanvasElement | null = null;
@@ -211,7 +213,6 @@ export class WorldScene {
     [this.buf, this.bctx] = canvas(320, 180);
     [this.rbuf, this.rctx] = canvas(320, 180);
     this.ground = bakeGround();
-    bakeBuildingShadows(this.ground.getContext("2d") as CanvasRenderingContext2D, BUILDINGS);
     this.minimap = new Minimap();
     this.reflectors = PROPS.filter((p) => REFLECTS.has(p.kind) && nearWaterBelow(p.x, p.z));
     this.state = state;
@@ -692,6 +693,7 @@ export class WorldScene {
     this.textPx = Math.max(2, Math.round(2 * dpr));
     const amb = ambientAt(this.shown);
     const t = this.time;
+    this.sunlight.prepare(this.shown, cx, cy, bw, bh);
 
     b.fillStyle = "#1d3d1f";
     b.fillRect(0, 0, bw, bh);
@@ -719,7 +721,7 @@ export class WorldScene {
         y: oy,
         draw: () => {
           if (behind) b.globalAlpha = 0.55;
-          b.drawImage(sp.img, sx, sy);
+          this.sunlight.drawSprite(b, sp.img, sx, sy, ox, oy, sp.ax, sp.ay, `building:${bd.id}`);
           const [Z, k] = [this.screenPx, this.textPx];
           for (const tx of sp.texts) {
             const [x, y] = [(sx + tx.x) * Z, (sy + tx.y) * Z];
@@ -773,14 +775,15 @@ export class WorldScene {
           if (tree && pz < y && pz > y - sp.img.height + 6 && Math.abs(px - x) < sp.img.width / 2) b.globalAlpha = 0.5;
           const sx = Math.round(x - sp.ax - cx);
           let sy = Math.round(y - sp.ay - cy);
+          const img = this.sunlight.sprite(sp.img, x, y, sp.ax, sp.ay, propSunId(p));
           if (p.kind === "boat") sy += Math.round(Math.sin(t * 1.6 + p.x) * 0.8);
-          if (p.kind === "flag") drawFlag(b, sp.img, sx, sy, t + p.v);
+          if (p.kind === "flag") drawFlag(b, img, sx, sy, t + p.v);
           else if (sways) {
             // 风吹过来，树冠和草尖左右晃一个像素；人从草边走过时晃得多。
             const brush = !tree && Math.hypot(px - x, pz - y) < 10 && this.moving ? 2 : 1;
             const dx = Math.round(Math.sin(t * (tree ? 1.3 : 2.2) + p.x * 0.7 + p.z * 0.3) * 0.9 * brush);
-            drawSway(b, sp.img, sx, sy, dx, p.kind === "willow" ? 0.3 : tree ? 0.62 : 0.5);
-          } else b.drawImage(sp.img, sx, sy);
+            drawSway(b, img, sx, sy, dx, p.kind === "willow" ? 0.3 : tree ? 0.62 : 0.5);
+          } else b.drawImage(img, sx, sy);
           if (p.kind === "fountain") drawFountainWater(b, sx, sy, t);
           if (p.kind === "campfire") drawFlames(b, Math.round(x - cx), Math.round(y - cy) - 4, t);
           b.globalAlpha = 1;
@@ -820,25 +823,29 @@ export class WorldScene {
     for (const n of NPCS) {
       const x = n.x * TILE;
       const y = n.z * TILE;
+      this.sunlight.castActor(x, y, 4, 23);
       if (!visible(x, y, 30)) continue;
       items.push({
         y,
         draw: () => {
           shadow(b, x - cx, y - cy, 5);
           const f = personFrame(n.look, n.dir, Math.floor(t * 1.5 + n.x) % 2 ? 0 : 2);
-          b.drawImage(f, Math.round(x - 9 - cx), Math.round(y - 26 - cy));
+          this.sunlight.drawSprite(b, f, Math.round(x - 9 - cx), Math.round(y - 26 - cy), x, y, 9, 26);
         },
       });
     }
     const horseItem = (h: HorsePuppet, onClick: (() => void) | null, tag: string | null, mark: boolean): void => {
       const x = h.x * TILE;
       const y = h.z * TILE;
+      const sunHeight = (Math.max(h.plan.legFront, h.plan.legRear) + h.plan.torsoHeight + h.plan.neckLength * 0.6) * HORSE_PPM * h.scale;
+      this.sunlight.castActor(x, y, 9 * h.scale, sunHeight);
       if (!visible(x, y, 50)) return;
       items.push({
         y,
         draw: () => {
           shadow(b, x - cx, y - cy, Math.round(11 * h.scale));
-          const r = h.drawPixel(b, x - cx, y - cy, HORSE_PPM);
+          const r = h.drawPixel(b, x - cx, y - cy, HORSE_PPM, (img, sx, sy) =>
+            this.sunlight.drawSprite(b, img, sx, sy, x, y, img.width / 2, img.height - 3, "", h.facing < 0));
           if (onClick) this.hits.push({ x: r.x, y: r.y, w: r.w, h: r.h, act: onClick });
           if (r.bubble) {
             const { text, x: bx, y: by } = r.bubble;
@@ -865,18 +872,20 @@ export class WorldScene {
     }
     if (this.tiedun) horseItem(this.tiedun, null, inside(YARD, s.player.x, s.player.z + 3) ? this.tiedun.name : null, false);
 
+    this.sunlight.castActor(px, pz, 4, 23);
     items.push({
       y: pz,
       draw: () => {
         shadow(b, px - cx, pz - cy, 5);
         const frame = this.moving ? Math.floor(this.walkPhase) % 4 : 0;
-        b.drawImage(personFrame(PLAYER_LOOK, this.dir, frame), Math.round(px - 9 - cx), Math.round(pz - 26 - cy));
+        this.sunlight.drawSprite(b, personFrame(PLAYER_LOOK, this.dir, frame), Math.round(px - 9 - cx), Math.round(pz - 26 - cy), px, pz, 9, 26);
         this.drawRope(b, cx, cy);
       },
     });
 
     const view = { cx, cy, bw, bh };
-    this.ambient.collect(items, b, view, shadow);
+    this.ambient.collect(items, b, view, shadow, this.sunlight);
+    this.sunlight.drawGround(b);
     items.sort((a, c) => a.y - c.y);
     for (const it of items) it.draw();
     this.ambient.drawAbove(b, view);
@@ -1069,6 +1078,30 @@ export class WorldScene {
       this.labels.push((sc) => banner(sc, (bw / 2) * Z, (8 - slide * 40) * K, text, K));
     }
   }
+}
+
+const propSunId = (p: Prop): string => `prop:${p.kind}:${p.x}:${p.z}:${p.v}`;
+
+/** 房屋按占地和屋顶高度挡光，树冠悬在树干上；其他摆设用贴图高度近似。 */
+function sunCasters(): SunCaster[] {
+  const casters: SunCaster[] = BUILDINGS.map((bd) => ({
+    id: `building:${bd.id}`,
+    footprint: boxFootprint(bd.x * TILE, bd.z * TILE, bd.w * TILE, bd.d * TILE),
+    bottom: 0,
+    height: buildingHeight(bd),
+  }));
+  for (const p of PROPS) {
+    const r = SHADOW[p.kind] ?? 0;
+    if (!r) continue;
+    const height = Math.max(3, propSprite(p).ay);
+    casters.push({
+      id: propSunId(p),
+      footprint: roundFootprint(p.x * TILE, p.z * TILE, r),
+      bottom: TREES.has(p.kind) ? height * 0.28 : 0,
+      height,
+    });
+  }
+  return casters;
 }
 
 function steer(h: HorsePuppet, tx: number, tz: number, speed: number): void {
