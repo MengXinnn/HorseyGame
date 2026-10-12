@@ -35,11 +35,12 @@ export function ambientAt(clock: number): Ambient {
   const h = clock / 60;
   const keys: Array<[number, string, number]> = [
     [4.5, "#2e3a78", 1],
-    [6, "#c8a0b8", 0.45],
-    [7.2, "#ffe6d8", 0.05],
-    [9, "#ffffff", 0],
-    [15.5, "#ffffff", 0],
-    [17.2, "#ffd8a8", 0.05],
+    [6, "#d5a6a0", 0.45],
+    [7.2, "#ffe3bc", 0.05],
+    [9, "#fff3df", 0],
+    [12, "#f4f8ff", 0],
+    [15.5, "#fff0d0", 0],
+    [17.2, "#ffd39a", 0.05],
     [18.6, "#dc9a86", 0.4],
     [19.8, "#6a5a96", 0.8],
     [21, "#36427e", 1],

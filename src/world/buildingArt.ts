@@ -1088,25 +1088,8 @@ export function buildingSprite(b: Building): BuildingSprite {
   return s;
 }
 
-/**
- * 房子落在地上的影子：光从左上来，影子落在右边和前面一点。烘进地面图里。
- */
-export function bakeBuildingShadows(ctx: CanvasRenderingContext2D, buildings: Building[]): void {
-  for (const b of buildings) {
-    const s = SPEC[b.kind];
-    const x1 = (b.x + b.w) * TILE;
-    const y1 = (b.z + b.d) * TILE;
-    const tall = s.wall + s.rise * 0.6 + 10;
-    const reach = Math.min(18, Math.round(tall * 0.3));
-    ctx.fillStyle = "rgba(18,32,22,0.28)";
-    ctx.beginPath();
-    ctx.moveTo(x1 - 2, y1 + 1);
-    ctx.lineTo(x1 - 2, b.z * TILE);
-    ctx.lineTo(x1 + reach, b.z * TILE + reach);
-    ctx.lineTo(x1 + reach, y1 + 4);
-    ctx.lineTo(b.x * TILE + 6, y1 + 4);
-    ctx.lineTo(b.x * TILE + 4, y1 + 1);
-    ctx.closePath();
-    ctx.fill();
-  }
+/** 建筑阻挡阳光的高度，与美术里的墙和屋顶尺寸一致。 */
+export function buildingHeight(b: Building): number {
+  const s = SPEC[b.kind];
+  return s.wall + s.rise * 0.6 + 10;
 }
