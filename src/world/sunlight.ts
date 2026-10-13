@@ -70,7 +70,7 @@ export function blocksSun(caster: SunCaster, sun: Sun, x: number, z: number, hei
   for (let i = 0; i < caster.footprint.length; i++) {
     const a = caster.footprint[i]!;
     const b = caster.footprint[(i + 1) % caster.footprint.length]!;
-    const c = cross(a, b, [x, z]);
+    const c = (b[0] - a[0]) * (z - a[1]) - (b[1] - a[1]) * (x - a[0]);
     const slope = (b[1] - a[1]) * sun.dx - (b[0] - a[0]) * sun.dz;
     if (Math.abs(slope) < 1e-9) {
       if (c < 0) return false;
@@ -82,16 +82,23 @@ export function blocksSun(caster: SunCaster, sun: Sun, x: number, z: number, hei
 }
 
 const CELL = 96;
+/** 格子坐标打包成一个整数当键，查询时不拼字符串。 */
+const cellKey = (gx: number, gz: number): number => (gz + 4096) * 8192 + gx + 4096;
+const NONE: SunCaster[] = [];
 interface Projection {
   caster: SunCaster;
   polygon: Point[];
+  x0: number;
+  x1: number;
+  z0: number;
+  z1: number;
 }
 
 /** 阴影和接收点共享一套几何；格子索引也包含画面外物体投进来的长影。 */
 export class SolarField {
   sun: Sun = sunAt(0);
   private minute = -1;
-  private grid = new Map<string, SunCaster[]>();
+  private grid = new Map<number, SunCaster[]>();
   private projections = new Map<SunCaster, Projection>();
 
   constructor(readonly casters: SunCaster[]) {
@@ -102,7 +109,7 @@ export class SolarField {
       const zs = caster.footprint.map((p) => p[1]);
       for (let z = Math.floor(Math.min(...zs) / CELL); z <= Math.floor((Math.max(...zs) + caster.height * 1.4) / CELL); z++)
         for (let x = Math.floor((Math.min(...xs) - caster.height * 3) / CELL); x <= Math.floor((Math.max(...xs) + caster.height * 3) / CELL); x++) {
-          const key = `${x},${z}`;
+          const key = cellKey(x, z);
           const entries = this.grid.get(key) ?? [];
           entries.push(caster);
           this.grid.set(key, entries);
@@ -119,8 +126,10 @@ export class SolarField {
   }
 
   shaded(x: number, z: number, height = 0, ignore = ""): boolean {
-    const entries = this.grid.get(`${Math.floor(x / CELL)},${Math.floor(z / CELL)}`) ?? [];
-    return entries.some((caster) => caster.id !== ignore && blocksSun(caster, this.sun, x, z, height));
+    if (this.sun.power <= 0) return false;
+    const entries = this.grid.get(cellKey(Math.floor(x / CELL), Math.floor(z / CELL))) ?? NONE;
+    for (const caster of entries) if (caster.id !== ignore && blocksSun(caster, this.sun, x, z, height)) return true;
+    return false;
   }
 
   visible(x: number, z: number, w: number, h: number): Projection[] {
@@ -128,20 +137,33 @@ export class SolarField {
     const seen = new Set<SunCaster>();
     for (let gz = Math.floor(z / CELL); gz <= Math.floor((z + h) / CELL); gz++)
       for (let gx = Math.floor(x / CELL); gx <= Math.floor((x + w) / CELL); gx++)
-        for (const caster of this.grid.get(`${gx},${gz}`) ?? []) seen.add(caster);
+        for (const caster of this.grid.get(cellKey(gx, gz)) ?? NONE) seen.add(caster);
     const result: Projection[] = [];
     for (const caster of seen) {
       let projection = this.projections.get(caster);
       if (!projection) {
-        projection = { caster, polygon: shadowPolygon(caster, this.sun) };
+        const polygon = shadowPolygon(caster, this.sun);
+        projection = { caster, polygon, x0: Infinity, x1: -Infinity, z0: Infinity, z1: -Infinity };
+        for (const [px, pz] of polygon) {
+          projection.x0 = Math.min(projection.x0, px);
+          projection.x1 = Math.max(projection.x1, px);
+          projection.z0 = Math.min(projection.z0, pz);
+          projection.z1 = Math.max(projection.z1, pz);
+        }
         this.projections.set(caster, projection);
       }
-      const xs = projection.polygon.map((p) => p[0]);
-      const zs = projection.polygon.map((p) => p[1]);
-      if (Math.max(...xs) >= x && Math.min(...xs) <= x + w && Math.max(...zs) >= z && Math.min(...zs) <= z + h) result.push(projection);
+      if (projection.x1 >= x && projection.x0 <= x + w && projection.z1 >= z && projection.z0 <= z + h) result.push(projection);
     }
     return result;
   }
+}
+
+const SHADE = "#162330";
+
+interface Tinted {
+  canvas: HTMLCanvasElement;
+  cells: Uint8Array;
+  power: number;
 }
 
 /** 只把物体投下的影区画到地面，接收物体则在自己的贴图内着色。 */
@@ -152,7 +174,10 @@ export class Sunlight {
   private mask = new Raster(1, 1);
   private ground = document.createElement("canvas");
   private pixels: ImageData | null = null;
-  private tinted = document.createElement("canvas");
+  private maskBytes: Uint8ClampedArray = new Uint8ClampedArray(0);
+  /** 每张贴图一块着色画布，尺寸不变就不重新分配；遮挡格子没变就直接复用。 */
+  private tinted = new WeakMap<HTMLCanvasElement, Tinted>();
+  private cells = new Uint8Array(0);
   private cx = 0;
   private cz = 0;
 
@@ -167,17 +192,22 @@ export class Sunlight {
       if (this.staticMask.w !== w || this.staticMask.h !== h) {
         this.staticMask = new Raster(w, h);
         this.mask = new Raster(w, h);
+        this.maskBytes = new Uint8ClampedArray(this.mask.data.buffer);
       } else this.staticMask.data.fill(0);
       for (const { polygon } of this.field.visible(cx, cz, w, h))
-        this.staticMask.poly(polygon.map(([x, z]) => [x - cx, z - cz]), "#162330");
+        this.staticMask.poly(polygon, SHADE, cx, cz);
     }
     this.mask.data.set(this.staticMask.data);
   }
 
   castActor(x: number, z: number, r: number, height: number): void {
-    if (this.field.sun.power <= 0) return;
-    const polygon = shadowPolygon({ id: "", footprint: roundFootprint(x, z, r), bottom: 0, height }, this.field.sun);
-    this.mask.poly(polygon.map(([px, pz]) => [px - this.cx, pz - this.cz]), "#162330");
+    const sun = this.field.sun;
+    if (sun.power <= 0) return;
+    // 影子够不到画面的就不算。
+    const reach = Math.abs(sun.dx) * height;
+    if (x + r + reach < this.cx || x - r - reach > this.cx + this.mask.w || z + r + sun.dz * height < this.cz || z - r > this.cz + this.mask.h) return;
+    const polygon = shadowPolygon({ id: "", footprint: roundFootprint(x, z, r), bottom: 0, height }, sun);
+    this.mask.poly(polygon, SHADE, this.cx, this.cz);
   }
 
   drawGround(b: CanvasRenderingContext2D): void {
@@ -186,7 +216,8 @@ export class Sunlight {
     if (this.ground.width !== w || this.ground.height !== h) { this.ground.width = w; this.ground.height = h; }
     const ctx = this.ground.getContext("2d")!;
     if (!this.pixels || this.pixels.width !== w || this.pixels.height !== h) this.pixels = ctx.createImageData(w, h);
-    this.pixels.data.set(new Uint8ClampedArray(data.buffer));
+    if (this.maskBytes.buffer !== data.buffer) this.maskBytes = new Uint8ClampedArray(data.buffer);
+    this.pixels.data.set(this.maskBytes);
     ctx.putImageData(this.pixels, 0, 0);
     b.save();
     b.globalAlpha = this.field.sun.power * 0.28;
@@ -194,28 +225,55 @@ export class Sunlight {
     b.restore();
   }
 
-  /** 每 6×4 个像素按接收高度查询遮挡，只在原贴图的不透明像素上加阴影。 */
-  sprite(img: HTMLCanvasElement, x: number, z: number, ax: number, ay: number, ignore = "", flipped = false): HTMLCanvasElement {
-    if (this.field.sun.power <= 0) return img;
-    if (this.tinted.width !== img.width || this.tinted.height !== img.height) { this.tinted.width = img.width; this.tinted.height = img.height; }
-    const ctx = this.tinted.getContext("2d")!;
-    ctx.clearRect(0, 0, img.width, img.height);
-    ctx.drawImage(img, 0, 0);
-    ctx.globalCompositeOperation = "source-atop";
-    for (let row = 0; row < img.height; row += 4) {
-      const height = Math.max(0, ay - row - 2);
-      for (let col = 0; col < img.width; col += 6) {
-        const wx = x + (col + 3 - ax) * (flipped ? -1 : 1);
-        if (!this.field.shaded(wx, z, height, ignore)) continue;
-        ctx.fillStyle = `rgba(22,35,48,${this.field.sun.power * 0.28})`;
-        ctx.fillRect(col, row, 6, 4);
+  /**
+   * 每 6×4 个像素按接收高度查询遮挡，只在原贴图的不透明像素上加阴影。
+   * 没被遮住就直接用原图；遮挡格子和日照都没变时复用上次的结果。
+   * live 表示原图每帧都会重画（马），这时总要重新着色。
+   */
+  sprite(img: HTMLCanvasElement, x: number, z: number, ax: number, ay: number, ignore = "", flipped = false, live = false): HTMLCanvasElement {
+    const power = this.field.sun.power;
+    if (power <= 0) return img;
+    const cols = Math.ceil(img.width / 6);
+    const rows = Math.ceil(img.height / 4);
+    const n = cols * rows;
+    if (this.cells.length < n) this.cells = new Uint8Array(n);
+    const cells = this.cells;
+    let any = false;
+    for (let row = 0; row < rows; row++) {
+      const height = Math.max(0, ay - row * 4 - 2);
+      for (let col = 0; col < cols; col++) {
+        const wx = x + (col * 6 + 3 - ax) * (flipped ? -1 : 1);
+        const hit = this.field.shaded(wx, z, height, ignore) ? 1 : 0;
+        cells[row * cols + col] = hit;
+        if (hit) any = true;
       }
     }
+    if (!any) return img;
+    let entry = this.tinted.get(img);
+    if (!entry || entry.canvas.width !== img.width || entry.canvas.height !== img.height) {
+      const canvas = entry?.canvas ?? document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      entry = { canvas, cells: new Uint8Array(n), power: -1 };
+      this.tinted.set(img, entry);
+    }
+    let same = !live && entry.power === power;
+    for (let i = 0; same && i < n; i++) same = entry.cells[i] === cells[i];
+    if (same) return entry.canvas;
+    entry.cells.set(cells.subarray(0, n));
+    entry.power = power;
+    const ctx = entry.canvas.getContext("2d")!;
+    ctx.globalCompositeOperation = "copy";
+    ctx.drawImage(img, 0, 0);
+    ctx.globalCompositeOperation = "source-atop";
+    ctx.fillStyle = `rgba(22,35,48,${power * 0.28})`;
+    for (let row = 0; row < rows; row++)
+      for (let col = 0; col < cols; col++) if (cells[row * cols + col]) ctx.fillRect(col * 6, row * 4, 6, 4);
     ctx.globalCompositeOperation = "source-over";
-    return this.tinted;
+    return entry.canvas;
   }
 
-  drawSprite(b: CanvasRenderingContext2D, img: HTMLCanvasElement, sx: number, sy: number, x: number, z: number, ax: number, ay: number, ignore = "", flipped = false): void {
-    b.drawImage(this.sprite(img, x, z, ax, ay, ignore, flipped), sx, sy);
+  drawSprite(b: CanvasRenderingContext2D, img: HTMLCanvasElement, sx: number, sy: number, x: number, z: number, ax: number, ay: number, ignore = "", flipped = false, live = false): void {
+    b.drawImage(this.sprite(img, x, z, ax, ay, ignore, flipped, live), sx, sy);
   }
 }

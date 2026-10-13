@@ -845,7 +845,7 @@ export class WorldScene {
         draw: () => {
           shadow(b, x - cx, y - cy, Math.round(11 * h.scale));
           const r = h.drawPixel(b, x - cx, y - cy, HORSE_PPM, (img, sx, sy) =>
-            this.sunlight.drawSprite(b, img, sx, sy, x, y, img.width / 2, img.height - 3, "", h.facing < 0));
+            this.sunlight.drawSprite(b, img, sx, sy, x, y, img.width / 2, img.height - 3, "", h.facing < 0, true));
           if (onClick) this.hits.push({ x: r.x, y: r.y, w: r.w, h: r.h, act: onClick });
           if (r.bubble) {
             const { text, x: bx, y: by } = r.bubble;
