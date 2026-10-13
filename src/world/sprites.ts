@@ -160,6 +160,10 @@ const GRASSY = new Set<number>([T.grass, T.meadow, T.paddock, T.infield]);
  * （按低频噪声 + Bayer 抖动铺开，地面不再是一整块平涂）。
  */
 const GROUND_COLORS: Record<number, { base: string; dark: string; light: string; field: [string, string, string] }> = {
+  [T.mud]: { base: "#71866c", dark: "#52634b", light: "#94a482", field: ["#71866c", "#627958", "#819478"] },
+  [T.rock]: { base: "#a79b83", dark: "#796d56", light: "#c3b99c", field: ["#a79b83", "#b4a78b", "#91876c"] },
+  [T.snow]: { base: "#dce6dc", dark: "#9baeb6", light: "#f5f4e7", field: ["#dce6dc", "#c9d9d3", "#e7ede1"] },
+  [T.forest]: { base: "#4d8252", dark: "#365e40", light: "#74a26a", field: ["#4d8252", "#49754c", "#5d905b"] },
   [T.grass]: { base: "#68ac3e", dark: "#4f8f30", light: "#84c650", field: ["#5f9f39", "#68ac3e", "#72b743"] },
   [T.meadow]: { base: "#7bb846", dark: "#5f9b36", light: "#9bd15e", field: ["#70ab40", "#7bb846", "#87c34e"] },
   [T.paddock]: { base: "#71b041", dark: "#559333", light: "#8cc955", field: ["#67a33b", "#71b041", "#7bba48"] },

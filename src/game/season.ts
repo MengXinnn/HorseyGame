@@ -1,5 +1,5 @@
 /**
- * 赛季日程：一天从清晨 6 点到午夜，傍晚 5 点开赛；每周日还一笔债。
+ * 31天赛季：行动计时，傍晚5点开赛；7/14/21/31日还款。
  * 这里只放规则和数字，不碰界面，方便测试。
  */
 import type { TimeOfDay } from "../render/scene";
@@ -30,6 +30,12 @@ export const TIME_COST = {
   bet: 10,
   trial: 30,
   rest: 60,
+  work: 30,
+  circus: 90,
+  edit: 60,
+  sample: 10,
+  chimera: 60,
+  relay: 90,
 } as const;
 
 /** 走这么多格（大约走 9 秒、跑 5 秒）花 TIME_COST.travel 分钟。从家走到镇上的喷泉大约半小时。 */
@@ -40,35 +46,43 @@ export const LASSOS_PER_DAY = 3;
 export const ENTRY_FEE = 50;
 export const SEQUENCING_FEE = 200;
 export const RACE_DISTANCE = 400;
-export const RACE_PRIZES = [400, 200, 100];
-export const SUMO_PRIZE = 300;
+export const RACE_PRIZES = [500, 250, 120];
+export const SUMO_PRIZE = 400;
 export const BOSS_PRIZE = 1000;
-/** 每周日晚上要还的钱（四周还清六万）。 */
+/** 7/14/21/31日的四笔本金，总计六万。 */
 export const DEBT_SCHEDULE = [2000, 8000, 20000, 30000];
 /** 一匹马从出生到成年要几天。 */
 export const FOAL_DAYS = 2;
 
-export type EventKind = "race" | "sumo" | "boss";
+export type EventKind = "race" | "sumo" | "boss" | "relay" | "cup";
 
-export const EVENT_LABELS: Record<EventKind, string> = { race: "平地赛", sumo: "相扑", boss: "老赵擂台" };
+export const EVENT_LABELS: Record<EventKind, string> = { race: "平地赛", sumo: "相扑", boss: "擂台", relay: "六地貌接力", cup: "天马杯" };
 
-/** 每天的赛事：单日平地赛，双日相扑，每周第七天老赵摆擂台。 */
+/** 主线31天；28日接力，31日杯赛，之后继续普通经营。 */
+export const SEASON_DAYS = 31;
+export const DEBT_DAYS = [7, 14, 21, 31] as const;
+
+/** 奇数日平地赛、偶数日相扑，主线的擂台、接力和杯赛覆盖对应日期。 */
 export function eventFor(day: number): EventKind {
-  if (day % 7 === 0) return "boss";
+  if (day === SEASON_DAYS) return "cup";
+  if (day === 28) return "relay";
+  if (day === 7 || day === 14 || day === 21) return "boss";
   return day % 2 === 1 ? "race" : "sumo";
 }
 
 export function weekOf(day: number): number {
-  return Math.ceil(day / 7);
+  return Math.min(4, Math.ceil(day / 7));
 }
 
 /** 这一周要还多少（第 5 周以后不再要债）。 */
 export function debtDue(day: number): number {
-  return DEBT_SCHEDULE[weekOf(day) - 1] ?? 0;
+  const index = DEBT_DAYS.findIndex((due) => due >= day);
+  return DEBT_SCHEDULE[index] ?? 0;
 }
 
 export function daysUntilDebt(day: number): number {
-  return weekOf(day) * 7 - day;
+  const next = DEBT_DAYS.find((due) => due >= day);
+  return next === undefined ? 0 : next - day;
 }
 
 /** 时钟（分钟）对应的时段，用来换天色。 */

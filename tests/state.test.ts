@@ -10,6 +10,8 @@ import {
   placeBet,
   register,
   sellHorse,
+  genesUnlocked,
+  SEQ_OPEN_DAY,
   sendToSequencing,
   serialize,
   sleep,
@@ -21,7 +23,6 @@ import {
 } from "../src/game/state";
 import { encodeGenome, randomGenome } from "../src/genome/genome";
 import { BOSS_PRIZE, DAY_START, debtDue, ENTRY_FEE, eventFor, RACE_PRIZES, SEQUENCING_FEE, START_MONEY } from "../src/game/season";
-import { laozhaoLines } from "../src/game/laozhao";
 import { createRng } from "../src/sim/rng";
 
 const ids = (g: GameState): [string, string] => [g.horses[0]!.id, g.horses[1]!.id];
@@ -76,16 +77,20 @@ describe("马厩", () => {
     expect(isFoal(foal, g.day)).toBe(false);
   });
 
-  it("测序交钱，第二天早上出结果", () => {
+  it("测序所第十天开门；测序交钱，第二天早上出结果，基因栏跟着解锁", () => {
     const g = newGame();
     const id = g.horses[0]!.id;
+    expect(sendToSequencing(g, id).ok).toBe(false);
+    expect(genesUnlocked(g)).toBe(false);
+    g.day = SEQ_OPEN_DAY;
     expect(sendToSequencing(g, id).ok).toBe(true);
-    expect(g.money).toBe(START_MONEY - SEQUENCING_FEE);
+    expect(g.money).toBe(START_MONEY - SEQUENCING_FEE / 2);
     expect(g.horses[0]!.sequenced).toBe(false);
     expect(sendToSequencing(g, id).ok).toBe(false);
     const night = sleep(g);
     expect(night.sequenced.map((h) => h.id)).toEqual([id]);
     expect(g.horses[0]!.sequenced).toBe(true);
+    expect(genesUnlocked(g)).toBe(true);
   });
 
   it("马厩有上限，怀着的小马也算", () => {
@@ -233,13 +238,55 @@ describe("夜晚结算和还债", () => {
     expect(g.money).toBeLessThan(5000 - debtDue(7) + 1);
   });
 
-  it("钱不够，牧场被收走", () => {
+  it("钱不够，马董宽限三天多收两成；宽限到了还不上，牧场被收走", () => {
     const g = newGame();
     g.day = 7;
     g.money = 500;
     const night = sleep(g);
-    expect(night.ruined).toBe(true);
+    expect(night.ruined).toBe(false);
+    expect(night.grace).toEqual({ amount: 2400, dueDay: 10 });
+    g.money = 0;
+    sleep(g);
+    sleep(g);
+    const due = sleep(g);
+    expect(due.day).toBe(10);
+    expect(due.ruined).toBe(true);
     expect(g.over).toBe(true);
+    expect(g.ending).toBe("mascot");
+  });
+
+  it("宽限期里还上了就接着过；宽限只给一次", () => {
+    const g = newGame();
+    g.day = 7;
+    g.money = 500;
+    sleep(g);
+    g.money = 5000;
+    sleep(g);
+    sleep(g);
+    const paid = sleep(g);
+    expect(paid.debtPaid).toBe(2400);
+    expect(g.grace).toBeNull();
+    expect(g.debtsPaid).toBe(1);
+    g.day = 14;
+    g.money = 0;
+    const second = sleep(g);
+    expect(second.grace).toBeNull();
+    expect(second.ruined).toBe(true);
+  });
+
+  it("四笔都还清定结局：拿了天马杯是天马行空，没拿是守住了", () => {
+    const g = newGame();
+    g.debtsPaid = 3;
+    g.day = 31;
+    g.money = 100_000;
+    expect(sleep(g).ending).toBe("kept");
+    const h = newGame();
+    h.debtsPaid = 3;
+    h.cupWon = true;
+    h.day = 31;
+    h.money = 100_000;
+    expect(sleep(h).ending).toBe("tianma");
+    expect(h.over).toBe(false);
   });
 
   it("当天没比的报名和赌注过夜作废", () => {
@@ -247,18 +294,5 @@ describe("夜晚结算和还债", () => {
     register(g, g.horses[0]!.id);
     sleep(g);
     expect(g.entry).toBeNull();
-  });
-});
-
-describe("老赵", () => {
-  it("第一次见面自我介绍，之后说经验之谈，擂台日下战书", () => {
-    const g = newGame();
-    const first = laozhaoLines(g);
-    expect(first.length).toBeGreaterThan(1);
-    expect(laozhaoLines(g)).toHaveLength(1);
-    g.day = 7;
-    expect(laozhaoLines(g).join("")).toContain("擂台");
-    g.flags["beat:tiedun"] = true;
-    expect(laozhaoLines(g).join("")).toContain("铁墩");
   });
 });

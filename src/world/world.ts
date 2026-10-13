@@ -6,6 +6,7 @@ import {
   INTERACTS,
   inside,
   LAOZHAO_SPOT,
+  MAILBOX,
   MAP_H,
   MAP_W,
   METERS_PER_TILE,
@@ -36,6 +37,8 @@ import { HorsePuppet } from "./puppet";
 import { Ambient } from "./ambient";
 import { ambientAt, Lighting, type Light } from "./lighting";
 import { Minimap, type MapMarks } from "./minimap";
+import { drawCharacter, drawProp } from "../render/storyAssets";
+import { hasWings } from "../game/activities";
 import { boxFootprint, roundFootprint, Sunlight, type SunCaster } from "./sunlight";
 
 export interface WorldHooks {
@@ -43,6 +46,9 @@ export interface WorldHooks {
   onHorseClick(horseId: string): void;
   onCaught(horseId: string, name: string): void;
   onToast(text: string): void;
+  /** 走到某个交互点跟前（剧情用：「去马厩看看」）。 */
+  onNear?(id: InteractId): void;
+  onLasso?(): void;
   /** 状态变了（钱、马、套索），让界面刷新。 */
   onChange(): void;
 }
@@ -201,6 +207,8 @@ export class WorldScene {
   /** 画面上的钟：做了事以后时间一下子跳过去，天色跟着几秒内慢慢转过去。 */
   private shown = 0;
   /** 上回在哪片地方算过路上的时间。 */
+  /** 任务箭头指向的位置（格子坐标）；没有任务时为 null。 */
+  marker: { x: number; z: number } | null = null;
   /** 打开面板、比赛进行中时暂停世界（时钟也停）。 */
   paused = false;
   active = true;
@@ -259,10 +267,10 @@ export class WorldScene {
     this.paddock = s.horses.map((h, i) => {
       const scale = isFoal(h, s.day) ? 0.62 : 1;
       const old = keep.get(h.id);
-      if (old && old.scale === scale) return old;
+      if (old && old.scale === scale && old.genome === h.genome && old.name === h.name && old.plan.wings === hasWings(h)) return old;
       const rx = PADDOCK.x0 + 2 + ((hashSeed(h.id) % 1000) / 1000) * (PADDOCK.x1 - PADDOCK.x0 - 4);
       const rz = PADDOCK.z0 + 3 + (i % 4) * ((PADDOCK.z1 - PADDOCK.z0 - 5) / 3);
-      return new HorsePuppet(h.id, h.name, h.genome, rx, rz, scale);
+      return new HorsePuppet(h.id, h.name, h.genome, rx, rz, scale, hasWings(h));
     });
     if (this.herdDay !== s.day) {
       this.herdDay = s.day;
@@ -434,6 +442,7 @@ export class WorldScene {
         bestD = d;
       }
     }
+    if (best && best !== this.nearby) this.hooks.onNear?.(best.id);
     this.nearby = best;
   }
 
@@ -581,6 +590,7 @@ export class WorldScene {
       return;
     }
     const thrown = throwLasso(s);
+    if (thrown.ok) this.hooks.onLasso?.();
     if (!thrown.ok) {
       this.hooks.onToast(thrown.reason);
       return;
@@ -819,6 +829,22 @@ export class WorldScene {
       items.push({ y: f.horizontal ? y + 1 : y + TILE, draw: () => drawFence(b, x - cx, y - cy, f) });
     }
 
+    const sets = [
+      { x: 85, z: 30, prop: 0, size: 100, day: 8 },
+      { x: 73, z: 74, prop: 8, size: 62, day: 12 },
+      { x: 94, z: 74, prop: 9, size: 56, day: 12 },
+      { x: 131, z: 75, prop: 10, size: 66, day: 15 },
+      { x: 79, z: 97, prop: 11, size: 76, day: 16 },
+      { x: 132, z: 97, prop: 12, size: 64, day: 23 },
+    ];
+    for (const set of sets) {
+      const x = set.x * TILE, y = set.z * TILE;
+      if (s.day >= set.day && visible(x, y, set.size)) items.push({ y, draw: () => { drawProp(b,set.prop,x-cx,y-cy,set.size); } });
+    }
+    if (s.day >= 8) {
+      const x=83*TILE,y=32*TILE;
+      if (visible(x,y,35)) items.push({y,draw:()=>{ drawCharacter(b,"米娅",Math.floor(t*2)%4===1?1:0,x-cx,y-cy,34); }});
+    }
     // 人物和马。
     for (const n of NPCS) {
       const x = n.x * TILE;
@@ -1069,6 +1095,11 @@ export class WorldScene {
       const y0 = drawTugGauge(b, bw, bh, this.tug);
       this.labels.push((sc) => floatText(sc, (bw / 2) * Z, (y0 - 11) * Z - (13 * k) / 2, "按住拉绳", "#fbefd4", k));
     }
+    if (this.state.story.inbox.length) {
+      const bob = Math.floor(this.time * 3) % 2;
+      drawBang(b, Math.round(MAILBOX.x * TILE - cx), Math.round(MAILBOX.z * TILE - cy - 26 - bob));
+    }
+    if (this.marker && !this.tug) drawMarker(b, this.marker.x * TILE - cx, this.marker.z * TILE - cy, bw, bh, this.time);
     if (this.banner) {
       const t = this.banner.t;
       const slide = t < 0.3 ? (0.3 - t) / 0.3 : t > 2.2 ? (t - 2.2) / 0.4 : 0;
@@ -1331,6 +1362,68 @@ function drawFlag(b: CanvasRenderingContext2D, img: HTMLCanvasElement, x: number
   for (let col = 4; col < img.width; col++) {
     const off = Math.round(Math.sin(t * 6 - col * 0.7) * ((col - 3) / 6));
     b.drawImage(img, col, 0, 1, 14, x + col, y + off, 1, 14);
+  }
+}
+
+/** 信箱上的感叹号：有新信。 */
+function drawBang(b: CanvasRenderingContext2D, x: number, y: number): void {
+  b.fillStyle = "#2a1a12";
+  b.fillRect(x - 3, y - 1, 6, 12);
+  b.fillRect(x - 3, y + 12, 6, 5);
+  b.fillStyle = "#f6d05a";
+  b.fillRect(x - 2, y, 4, 10);
+  b.fillRect(x - 2, y + 13, 4, 3);
+}
+
+/**
+ * 任务箭头：目标在画面里就在它头顶上下跳；在画面外就贴着画面边缘，指向它的方向。
+ */
+function drawMarker(b: CanvasRenderingContext2D, tx: number, ty: number, bw: number, bh: number, time: number): void {
+  const bob = Math.round(Math.sin(time * 5) * 2);
+  const margin = 14;
+  const onScreen = tx > margin && tx < bw - margin && ty - 30 > margin && ty < bh - margin;
+  if (onScreen) {
+    const x = Math.round(tx);
+    const y = Math.round(ty - 34 + bob);
+    b.fillStyle = "#2a1a12";
+    b.fillRect(x - 6, y - 1, 13, 4);
+    b.fillRect(x - 5, y + 3, 11, 2);
+    b.fillRect(x - 4, y + 5, 9, 2);
+    b.fillRect(x - 3, y + 7, 7, 2);
+    b.fillRect(x - 2, y + 9, 5, 2);
+    b.fillRect(x - 1, y + 11, 3, 2);
+    b.fillStyle = "#f6d05a";
+    b.fillRect(x - 5, y, 11, 2);
+    b.fillRect(x - 4, y + 2, 9, 2);
+    b.fillRect(x - 3, y + 4, 7, 2);
+    b.fillRect(x - 2, y + 6, 5, 2);
+    b.fillRect(x - 1, y + 8, 3, 2);
+    b.fillStyle = "#fff6c0";
+    b.fillRect(x - 4, y, 3, 1);
+    return;
+  }
+  // 画面外：从画面中心朝目标方向，贴边画一个小三角。
+  const cx = bw / 2;
+  const cy = bh / 2;
+  const ang = Math.atan2(ty - 16 - cy, tx - cx);
+  const ex = Math.max(margin, Math.min(bw - margin, cx + Math.cos(ang) * bw));
+  const ey = Math.max(margin, Math.min(bh - margin, cy + Math.sin(ang) * bh));
+  const ox = Math.round(ex - Math.cos(ang) * (2 + bob));
+  const oy = Math.round(ey - Math.sin(ang) * (2 + bob));
+  for (let i = 0; i < 6; i++) {
+    const w = 6 - i;
+    const px = Math.round(ox + Math.cos(ang) * (i - 3) * 1.5);
+    const py = Math.round(oy + Math.sin(ang) * (i - 3) * 1.5);
+    b.fillStyle = "#2a1a12";
+    b.fillRect(px - w - 1, py - w - 1, w * 2 + 2, w * 2 + 2);
+  }
+  for (let i = 0; i < 6; i++) {
+    const w = 5 - i;
+    if (w <= 0) continue;
+    const px = Math.round(ox + Math.cos(ang) * (i - 3) * 1.5);
+    const py = Math.round(oy + Math.sin(ang) * (i - 3) * 1.5);
+    b.fillStyle = "#f6d05a";
+    b.fillRect(px - w, py - w, w * 2, w * 2);
   }
 }
 

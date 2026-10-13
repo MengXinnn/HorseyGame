@@ -256,6 +256,18 @@ function drawFacingRight(ctx: CanvasRenderingContext2D, pose: HorsePose, plan: B
   ctx.restore();
   ctx.restore();
 
+  if (plan.wings) {
+    const flap = pose.fallen ? 0.1 : 0.4 + Math.sin(pose.phase * 0.7) * 0.25;
+    ctx.save();
+    ctx.translate(tx - L * 0.12, ty - H * 0.35);
+    ctx.rotate(-pose.torso.angle - flap);
+    for (let feather = 0; feather < 5; feather++) {
+      ctx.fillStyle = feather % 2 ? "#f9eed6" : "#cad4c8";
+      ctx.fillRect(-L * 0.12, -feather * H * 0.15, L * (0.64 - feather * 0.07), Math.max(2,H * 0.2));
+    }
+    ctx.restore();
+  }
+
   // 颈和头
   const nl = plan.neckLength;
   const ux = Math.cos(NECK_ANGLE);

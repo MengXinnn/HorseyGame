@@ -3,23 +3,25 @@ import { breed, decodeGenome, encodeGenome, express, makeGenome, randomGenome, t
 import { displayStats } from "../genome/traits";
 import { createRng, hashSeed, type Rng } from "../sim/rng";
 import { horseName } from "./names";
+import { decodeHorseCode } from "./horseCode";
 import { emptyPublicRecord, raceOdds, recordRace, recordSumo, sumoOdds, type PublicRecord } from "./odds";
+import { bossFor, CUP, prizeFor, sportOf, STORY_HORSES } from "./calendar";
 import {
-  BOSS_PRIZE,
   DAY_START,
+  DEBT_SCHEDULE,
+  DEBT_DAYS,
   debtDue,
   ENTRY_FEE,
   EVENT_TIME,
+  EVENT_LABELS,
   eventFor,
   feedCost,
   FOAL_DAYS,
   LASSOS_PER_DAY,
   MIDNIGHT,
-  RACE_PRIZES,
   salePrice,
   SEQUENCING_FEE,
   START_MONEY,
-  SUMO_PRIZE,
   TIME_COST,
   TRAVEL_TILES,
   betLimit,
@@ -52,6 +54,9 @@ export interface StableHorse {
   bredDay: number;
   record: HorseRecord;
   pub: PublicRecord;
+  parentIds: [string, string] | null;
+  /** 背部羽翼的两条遗传链；载有材料不代表一定表现。 */
+  wingGenes: readonly [0 | 1, 0 | 1];
 }
 
 /** 镇上其他人的马：有名字、有主人、有公开战绩，是你在赛场上反复遇到的对手。 */
@@ -60,6 +65,7 @@ export interface RivalHorse {
   name: string;
   owner: string;
   genome: Genome;
+  wingGenes?: readonly [0 | 1, 0 | 1];
   pub: PublicRecord;
 }
 
@@ -67,6 +73,7 @@ export interface Entry {
   day: number;
   kind: EventKind;
   horseId: string;
+  team?: [string, string, string];
 }
 
 export interface Bet {
@@ -82,6 +89,9 @@ export interface Pregnancy {
   damId: string;
   sireId: string;
   dueDay: number;
+  snapshots?: [Genome, Genome];
+  wings?: readonly [0 | 1, 0 | 1];
+  prepared?: boolean;
 }
 
 export interface LedgerLine {
@@ -89,9 +99,36 @@ export interface LedgerLine {
   amount: number;
 }
 
+/** 剧情进度：当前主线任务、找到的日记、信箱。 */
+export interface StoryState {
+  /** 当前主线任务的 id；全部做完是 null。 */
+  quest: string | null;
+  /** 当前任务完成了几次（例如「套 0/1 匹」）。 */
+  progress: number;
+  /** 找到的外婆日记页码。 */
+  diary: number[];
+  /** 信箱里还没读的信。 */
+  inbox: string[];
+  /** 读过的信，可以在日记本里翻。 */
+  read: string[];
+  played: Record<string, boolean>;
+  choices: Record<string, string>;
+  history: Array<{ id: string; day: number; title: string; lines: Array<{ who: string; text: string }> }>;
+  pending: Array<{ who: string; text: string; actor?: string; sceneDay?: number; sceneTitle?: string }>;
+}
+
+/** 欠债没还上时马董给的宽限：连本带利，几天后再来收。 */
+export interface Grace {
+  amount: number;
+  dueDay: number;
+}
+
+export type Ending = "tianma" | "kept" | "mascot";
+
 export interface GameState {
-  version: 2;
+  version: 4;
   horses: StableHorse[];
+  archive: StableHorse[];
   selectedId: string;
   day: number;
   /** 当天时钟，单位分钟（6:00 = 360）。 */
@@ -112,11 +149,23 @@ export interface GameState {
   flags: Record<string, boolean>;
   /** 欠债没还上，牧场被收走了。 */
   over: boolean;
+  story: StoryState;
+  grace: Grace | null;
+  /** 宽限只给一次。 */
+  graceUsed: boolean;
+  /** 已经还清了几笔债（4 笔还完就是牧场的主人）。 */
+  debtsPaid: number;
+  /** 天马杯拿过冠军。 */
+  cupWon: boolean;
+  /** 赛季结局；之后进入无尽模式。 */
+  ending: Ending | null;
+  performance: { day: number; horseId: string; program: "haul" | "jump" | "balance"; count: number } | null;
   /** 随机事件的种子计数器，保证存档可复现。 */
   counter: number;
 }
 
-const SAVE_KEY = "tianma.save.v2";
+const SAVE_KEY = "tianma.save.v4";
+const OLD_SAVE_KEYS = ["tianma.save.v3", "tianma.save.v2"];
 export const STABLE_LIMIT = 12;
 export const HOME = { x: 17.5, z: 69.6 };
 
@@ -142,6 +191,8 @@ export function createHorse(name: string, genome: Genome, extra: Partial<StableH
     bredDay: 0,
     record: emptyRecord(),
     pub: emptyPublicRecord(),
+    parentIds: null,
+    wingGenes: [0, 0],
     ...extra,
   };
 }
@@ -189,7 +240,52 @@ function makeRivals(): RivalHorse[] {
     for (let k = 0; k < sumo; k++) recordSumo(pub, rng.next() < strength / 100);
     rivals.push({ id: `r-${i}`, name, owner: owners[i % owners.length] as string, genome, pub });
   }
+  return ensureStoryRivals(rivals);
+}
+
+/**
+ * 剧情里的对手马：米娅的迷你杂技马「豆包」、K 博士的「样本七号」（擂台前一晚照全镇最强的马复制）、
+ * 马董的完美马「完璧」（数值顶格，胆子极小）。旧存档读进来时补上。
+ */
+export function ensureStoryRivals(rivals: RivalHorse[]): RivalHorse[] {
+  const story: RivalHorse[] = [
+    {
+      id: "r-chaosheng", name: "潮生", owner: "老舟",
+      genome: makeGenome({ size: [0, 1], legF: [0, 1], legR: [0, 1], hoof: [2, 1], con: [2, 1], courage: [1, 1], power: [0, 1], coat: [-1, 0] }),
+      pub: { ...emptyPublicRecord(), races: 4, wins: 1, podiums: 3, rankSum: 12 },
+    },
+    {
+      id: "r-doubao",
+      name: "豆包",
+      owner: "米娅",
+      genome: makeGenome({ size: [-2, -2], torso: [-1, -1], legF: [0, 1], legR: [1, 1], hoof: [1, 1], stride: [2, 1], power: [1, 1], con: [1, 1], courage: [2, 2], tail: [1, 2], coat: [2, 1], pattern: [2, 2] }),
+      pub: { ...emptyPublicRecord(), races: 5, wins: 2, podiums: 4, rankSum: 11 },
+    },
+    {
+      id: "r-sample7",
+      name: "样本七号",
+      owner: "K博士",
+      genome: makeGenome({ legF: [1, 1], legR: [1, 1], stride: [1, 1], power: [1, 0], con: [1, 1], girth: [0, 1], courage: [1, 1] }),
+      pub: emptyPublicRecord(),
+    },
+    {
+      id: "r-wanbi",
+      name: CUP.horse,
+      owner: CUP.owner,
+      genome: makeGenome({ legF: [2, 2], legR: [2, 2], stride: [2, 1], power: [2, 2], con: [2, 2], girth: [1, 0], hoof: [1, 1], courage: [-2, -2], coat: [2, 2], pattern: [0, 0] }),
+      pub: { ...emptyPublicRecord(), races: 3, wins: 3, podiums: 3, rankSum: 3 },
+    },
+  ];
+  for (const r of story) if (!rivals.some((x) => x.id === r.id)) rivals.push(r);
   return rivals;
+}
+
+/** 旧存档读进来时的占位任务：由剧情模块换成当天该做的任务。 */
+export const RESUME = "@resume";
+
+/** 新的剧情进度：从第一个任务开始，信箱里躺着外婆的信。 */
+export function newStory(): StoryState {
+  return { quest: "d1-letter", progress: 0, diary: [], inbox: ["waipo"], read: [], played: {}, choices: {}, history: [], pending: [] };
 }
 
 /** 开局：外婆留下的牧场、两匹马、三百块钱，和一屁股债。 */
@@ -205,8 +301,9 @@ export function newGame(): GameState {
     ),
   ];
   return {
-    version: 2,
+    version: 4,
     horses,
+    archive: [...horses],
     selectedId: horses[0]!.id,
     day: 1,
     clock: DAY_START,
@@ -223,6 +320,13 @@ export function newGame(): GameState {
     flags: {},
     over: false,
     counter: 1,
+    story: newStory(),
+    grace: null,
+    graceUsed: false,
+    debtsPaid: 0,
+    cupWon: false,
+    ending: null,
+    performance: null,
   };
 }
 
@@ -238,13 +342,14 @@ export function serialize(state: GameState): string {
     const { genome, ...rest } = x;
     return { code: encodeGenome(genome), rest };
   };
-  return JSON.stringify({ ...state, horses: state.horses.map(pack), rivals: state.rivals.map(pack) });
+  return JSON.stringify({ ...state, horses: state.horses.map(pack), archive: state.archive.map(pack), rivals: state.rivals.map(pack) });
 }
 
 export function deserialize(text: string): GameState | null {
   try {
-    const raw = JSON.parse(text) as Omit<GameState, "horses" | "rivals"> & { horses: Saved<StableHorse>[]; rivals: Saved<RivalHorse>[] };
-    if (raw.version !== 2 || !Array.isArray(raw.horses) || !Array.isArray(raw.rivals)) return null;
+    const raw = JSON.parse(text) as Omit<GameState, "horses" | "rivals" | "archive"> & { horses: Saved<StableHorse>[]; archive?: Saved<StableHorse>[]; rivals: Saved<RivalHorse>[] };
+    if (![2, 3, 4].includes(raw.version)) return null;
+    if (!Array.isArray(raw.horses) || !Array.isArray(raw.rivals)) return null;
     const unpack = <T>(list: Saved<T>[]): T[] => {
       const out: T[] = [];
       for (const s of list) {
@@ -257,12 +362,19 @@ export function deserialize(text: string): GameState | null {
     const horses = unpack<StableHorse>(raw.horses).map((h) => ({ ...createHorse(h.name, h.genome), ...h, record: { ...emptyRecord(), ...h.record }, pub: { ...emptyPublicRecord(), ...h.pub } }));
     if (horses.length === 0) return null;
     const rivals = unpack<RivalHorse>(raw.rivals);
+    // 第2版存档没有剧情：从当前日期的事件继续，不补演已经过去的章节。
+    const story: StoryState = raw.story ? { ...newStory(), ...raw.story } : { ...newStory(), quest: RESUME, inbox: [] };
     return {
       ...fresh,
       ...raw,
-      version: 2,
+      version: 4,
       horses,
-      rivals: rivals.length ? rivals : fresh.rivals,
+      archive: [...horses, ...unpack<StableHorse>(raw.archive ?? []).filter(h => !horses.some(live => live.id === h.id))],
+      rivals: rivals.length ? ensureStoryRivals(rivals) : fresh.rivals,
+      story,
+      debtsPaid: raw.debtsPaid ?? DEBT_DAYS.filter((d) => d < raw.day).length,
+      flags: raw.day > 1 ? { ...raw.flags, intro: true } : raw.flags ?? {},
+      walked: raw.walked ?? 0,
       selectedId: horses.some((h) => h.id === raw.selectedId) ? raw.selectedId : horses[0]!.id,
     };
   } catch {
@@ -272,9 +384,9 @@ export function deserialize(text: string): GameState | null {
 
 export function loadGame(): GameState {
   try {
-    const text = localStorage.getItem(SAVE_KEY);
-    if (text) {
-      const state = deserialize(text);
+    for (const key of [SAVE_KEY, ...OLD_SAVE_KEYS]) {
+      const text = localStorage.getItem(key);
+      const state = text ? deserialize(text) : null;
       if (state) return state;
     }
   } catch {
@@ -293,7 +405,7 @@ export function saveGame(state: GameState): void {
 
 export function resetGame(): GameState {
   try {
-    localStorage.removeItem(SAVE_KEY);
+    for (const key of [SAVE_KEY, ...OLD_SAVE_KEYS]) localStorage.removeItem(key);
   } catch {
     // 同上。
   }
@@ -313,6 +425,27 @@ function earn(state: GameState, label: string, amount: number): void {
   if (amount <= 0) return;
   state.money += amount;
   state.ledger.push({ label, amount });
+}
+
+/** 剧情奖励的钱，记进当天的账。 */
+export const grant = earn;
+export const charge = spend;
+
+/** 测序所第 10 天才开门（小白进城进修了）；旧存档里测过序的照常开。 */
+export const SEQ_OPEN_DAY = 10;
+
+export function sequencingOpen(state: GameState): boolean {
+  return state.day >= SEQ_OPEN_DAY || state.horses.some((h) => h.sequenced || h.sequencing);
+}
+
+/** 马的详情里有没有「基因」一栏：拿到第一份测序结果以后才有。 */
+export function genesUnlocked(state: GameState): boolean {
+  return !!state.flags.genes || state.horses.some((h) => h.sequenced);
+}
+
+/** 第一次测序小白给打对折。 */
+export function sequencingFee(state: GameState): number {
+  return !state.flags["seq:half-used"] ? SEQUENCING_FEE / 2 : SEQUENCING_FEE;
 }
 
 /* ---------------- 马厩 ---------------- */
@@ -379,7 +512,9 @@ export function waitForEvent(state: GameState): ActionResult {
 
 /** 试跑一趟。 */
 export function startTrial(state: GameState, horseId: string): ActionResult {
-  if (!findHorse(state, horseId)) return fail("找不到这匹马");
+  const horse = findHorse(state, horseId);
+  if (!horse) return fail("找不到这匹马");
+  if (isFoal(horse, state.day)) return fail("小马还没长大");
   if (!hasTime(state, TIME_COST.trial)) return fail(TOO_LATE);
   passTime(state, TIME_COST.trial);
   return OK;
@@ -397,7 +532,11 @@ export function mate(state: GameState, damId: string, sireId: string): ActionRes
   passTime(state, TIME_COST.mate);
   dam.bredDay = state.day;
   sire.bredDay = state.day;
-  state.pregnancies.push({ damId, sireId, dueDay: state.day + 1 });
+  const rng = rngFor(state, "wing-inheritance");
+  state.pregnancies.push({ damId, sireId, dueDay: state.day + 1,
+    snapshots: [structuredClone(dam.genome), structuredClone(sire.genome)],
+    wings: [rng.pick(dam.wingGenes), rng.pick(sire.wingGenes)],
+  });
   return OK;
 }
 
@@ -405,9 +544,12 @@ export function mate(state: GameState, damId: string, sireId: string): ActionRes
 export function sendToSequencing(state: GameState, id: string): ActionResult {
   const h = findHorse(state, id);
   if (!h) return fail("找不到这匹马");
+  if (!sequencingOpen(state)) return fail("博士出门，暂停营业");
   if (h.sequenced || h.sequencing) return fail("已经测过了");
   if (!hasTime(state, TIME_COST.sequence)) return fail(TOO_LATE);
-  if (!spend(state, `测序 ${h.name}`, SEQUENCING_FEE)) return fail("钱不够");
+  const fee = sequencingFee(state);
+  if (!spend(state, `测序 ${h.name}`, fee)) return fail("钱不够");
+  if (fee < SEQUENCING_FEE) state.flags["seq:half-used"] = true;
   passTime(state, TIME_COST.sequence);
   h.sequencing = true;
   return OK;
@@ -423,7 +565,8 @@ export function sellHorse(state: GameState, id: string): ActionResult {
   const h = findHorse(state, id);
   if (!h) return fail("找不到这匹马");
   if (state.horses.length <= 1) return fail("最后一匹马不能卖");
-  if (state.entry?.horseId === id) return fail("它报名了今天的比赛");
+  if (state.performance?.horseId === id) return fail("它正在演出");
+  if (state.entry?.horseId === id || state.entry?.team?.includes(id)) return fail("它报名了今天的比赛");
   if (state.pregnancies.some((p) => p.damId === id || p.sireId === id)) return fail("它刚配过种");
   if (!hasTime(state, TIME_COST.sell)) return fail(TOO_LATE);
   passTime(state, TIME_COST.sell);
@@ -456,6 +599,7 @@ export function addCaught(state: GameState, name: string, genome: Genome): Stabl
   const finalName = taken.has(name) ? horseName(rngFor(state, "rename"), taken) : name;
   const horse = createHorse(finalName, genome);
   state.horses.push(horse);
+  state.archive.push(horse);
   passTime(state, TIME_COST.catch);
   return horse;
 }
@@ -474,13 +618,14 @@ export function wildHerd(state: GameState, region: number, count: number): Array
 /** 用马码导入一匹马（朋友分享的马）。 */
 export function importHorse(state: GameState, code: string): StableHorse | "full" | "invalid" | "late" {
   if (state.horses.length + state.pregnancies.length >= STABLE_LIMIT) return "full";
-  const genome = decodeGenome(code.trim());
-  if (!genome) return "invalid";
+  const decoded = decodeHorseCode(code);
+  if (!decoded) return "invalid";
   if (!hasTime(state, TIME_COST.import)) return "late";
   passTime(state, TIME_COST.import);
   const rng = rngFor(state, `import:${code}`);
-  const horse = createHorse(horseName(rng, new Set(state.horses.map((h) => h.name))), genome);
+  const horse = createHorse(horseName(rng, new Set(state.horses.map((h) => h.name))), decoded.genome, { wingGenes: decoded.wingGenes });
   state.horses.push(horse);
+  state.archive.push(horse);
   return horse;
 }
 
@@ -491,17 +636,25 @@ export interface FieldEntry {
   name: string;
   owner: string;
   genome: Genome;
+  wingGenes?: readonly [0 | 1, 0 | 1];
   pub: PublicRecord;
   mine: boolean;
 }
 
 /** 今天赛事的对手：由日期决定，同一天怎么看都一样。 */
 export function todaysRivals(state: GameState, kind: EventKind = eventFor(state.day)): RivalHorse[] {
-  if (kind === "boss") return state.rivals.filter((r) => r.name === TIEDUN);
+  const pool = state.rivals.filter((r) => !STORY_HORSES.includes(r.name));
+  const star = kind === "boss" ? bossFor(state.day)?.horse : kind === "cup" ? CUP.horse : undefined;
+  const picked = star ? state.rivals.filter((r) => r.name === star) : [];
+  if (kind === "boss" && sportOf(state.day) === "sumo") return picked;
+  if (kind === "cup") {
+    // 正文的豆包、阿七和潮生在场，其余名额按公开战绩邀请。
+    const score = (r: RivalHorse): number => r.pub.wins * 3 + r.pub.podiums + r.pub.sumoWins;
+    const guests = state.rivals.filter(r => ["r-doubao", "r-sample7", "r-chaosheng"].includes(r.id));
+    return picked.concat(guests, [...pool].filter(r => !guests.includes(r)).sort((a, b) => score(b) - score(a)).slice(0, CUP.rivals - guests.length));
+  }
   const rng = createRng(hashSeed(`field:${state.day}`));
-  const pool = state.rivals.filter((r) => r.name !== TIEDUN);
-  const picked: RivalHorse[] = [];
-  const want = kind === "race" ? 7 : 1;
+  const want = sportOf(state.day) === "race" ? 7 : 1;
   while (picked.length < want && pool.length) {
     picked.push(pool.splice(rng.int(0, pool.length - 1), 1)[0] as RivalHorse);
   }
@@ -514,11 +667,11 @@ export function todaysField(state: GameState): FieldEntry[] {
   const rivals = todaysRivals(state, kind);
   const field: FieldEntry[] = [];
   const mine = state.entry && state.entry.day === state.day ? findHorse(state, state.entry.horseId) : undefined;
-  if (mine) field.push({ id: mine.id, name: mine.name, owner: "你", genome: mine.genome, pub: mine.pub, mine: true });
-  for (const r of rivals) field.push({ id: r.id, name: r.name, owner: r.owner, genome: r.genome, pub: r.pub, mine: false });
+  if (mine) field.push({ id: mine.id, name: mine.name, owner: "你", genome: mine.genome, wingGenes: mine.wingGenes, pub: mine.pub, mine: true });
+  for (const r of rivals) field.push({ id: r.id, name: r.name, owner: r.owner, genome: r.genome, wingGenes: r.wingGenes, pub: r.pub, mine: false });
   // 没报名时空出来的位置由镇上另一匹马补上：平地赛凑满 8 匹，相扑和擂台凑成一对。
   if (!mine) {
-    const pool = state.rivals.filter((r) => r.name !== TIEDUN && !rivals.includes(r));
+    const pool = state.rivals.filter((r) => !STORY_HORSES.includes(r.name) && !rivals.includes(r));
     const extra = pool.length ? pool[hashSeed(`extra:${state.day}`) % pool.length] : undefined;
     if (extra) field.push({ id: extra.id, name: extra.name, owner: extra.owner, genome: extra.genome, pub: extra.pub, mine: false });
   }
@@ -528,23 +681,25 @@ export function todaysField(state: GameState): FieldEntry[] {
 /** 今天的赔率，和 todaysField 一一对应。 */
 export function todaysOdds(state: GameState): number[] {
   const field = todaysField(state);
-  if (eventFor(state.day) === "race") return raceOdds(field.map((f) => ({ record: f.pub, key: `${f.id}:${state.day}` })));
+  if (sportOf(state.day) === "race") return raceOdds(field.map((f) => ({ record: f.pub, key: `${f.id}:${state.day}` })));
   if (field.length < 2) return field.map(() => 1);
   const mass = (g: Genome): number => bodyPlanFrom(express(g)).totalMass;
   return sumoOdds({ record: field[0]!.pub, mass: mass(field[0]!.genome) }, { record: field[1]!.pub, mass: mass(field[1]!.genome) });
 }
 
 /** 报名今天的赛事。 */
-export function register(state: GameState, horseId: string): ActionResult {
+export function register(state: GameState, horseId: string, team?: [string, string, string]): ActionResult {
   const h = findHorse(state, horseId);
   if (!h) return fail("找不到这匹马");
   if (isFoal(h, state.day)) return fail("小马不能参赛");
+  if (eventFor(state.day) === "relay" && (!team || team[0] !== horseId || new Set(team).size !== 3 || team.some(id => !findHorse(state, id) || isFoal(findHorse(state, id)!, state.day)))) return fail("接力需要三匹不同的成年马");
   if (state.entry?.day === state.day) return fail("今天已经报过名");
   if (state.bet?.day === state.day) return fail("先报名再下注");
   if (!eventPending(state)) return fail("今天的报名截止了");
+  if (state.clock + TIME_COST.register > EVENT_TIME) return fail("来不及报名了");
   if (!spend(state, "报名费", ENTRY_FEE)) return fail("钱不够");
   passTime(state, TIME_COST.register);
-  state.entry = { day: state.day, kind: eventFor(state.day), horseId };
+  state.entry = { day: state.day, kind: eventFor(state.day), horseId, ...(team ? { team: [...team] } : {}) };
   return OK;
 }
 
@@ -552,10 +707,11 @@ export function register(state: GameState, horseId: string): ActionResult {
 export function placeBet(state: GameState, horseId: string, amount: number, insured: boolean): ActionResult {
   if (state.bet?.day === state.day) return fail("今天已经下过注");
   if (!eventPending(state)) return fail("收摊了，明天请早");
+  if (state.clock + TIME_COST.bet > EVENT_TIME) return fail("来不及下注了");
   const field = todaysField(state);
   const i = field.findIndex((f) => f.id === horseId);
   if (i < 0) return fail("这匹马今天不上场");
-  if (amount <= 0) return fail("押多少？");
+  if (!Number.isFinite(amount) || !Number.isInteger(amount) || amount <= 0) return fail("押多少？");
   if (amount > betLimit(state.reputation)) return fail("超过下注上限");
   const odds = todaysOdds(state)[i] as number;
   if (!spend(state, "下注", amount)) return fail("钱不够");
@@ -575,29 +731,46 @@ export interface EventOutcome {
   reputation: number;
 }
 
+/** 名望：平地赛进前三、相扑赢了 +1，擂台赢了 +3，天马杯冠军 +10、进前三 +3。 */
+export function reputationFor(kind: EventKind, sport: "race" | "sumo", rank: number): number {
+  if (kind === "cup") return rank === 1 ? 10 : rank <= 3 ? 3 : 0;
+  if (kind === "boss") return rank === 1 ? 3 : 0;
+  if (sport === "race") return rank <= 3 ? 1 : 0;
+  return rank === 1 ? 1 : 0;
+}
+
 /** 比赛结束后结算：奖金、赌注、声望、公开战绩。 */
 export function applyOutcome(state: GameState, kind: EventKind, order: string[] | null): EventOutcome {
   const field = todaysField(state);
   const out: EventOutcome = { kind, order, myRank: null, prize: 0, betReturn: 0, reputation: 0 };
+  if (state.flags[`settled:${state.day}`]) return out;
+  if(order&&(order.length!==field.length||new Set(order).size!==order.length||order.some(id=>!field.some(f=>f.id===id))))return out;
+  state.flags[`settled:${state.day}`]=true;
+  const sport = sportOf(state.day);
   const recordOf = (id: string): PublicRecord | undefined => findHorse(state, id)?.pub ?? state.rivals.find((r) => r.id === id)?.pub;
   if (order) {
     order.forEach((id, i) => {
       const rec = recordOf(id);
       if (!rec) return;
-      if (kind === "race") recordRace(rec, i + 1);
+      if (sport === "race") recordRace(rec, i + 1);
       else recordSumo(rec, i === 0);
     });
   }
   const mine = field.find((f) => f.mine);
   if (mine && order) {
     const rank = order.indexOf(mine.id) + 1;
+    if(rank===0)return out;
     out.myRank = rank;
-    if (kind === "race") out.prize = RACE_PRIZES[rank - 1] ?? 0;
-    else if (rank === 1) out.prize = kind === "boss" ? BOSS_PRIZE : SUMO_PRIZE;
-    if (kind === "race" ? rank <= 3 : rank === 1) out.reputation = kind === "boss" ? 3 : 1;
-    if (kind === "boss" && rank === 1) state.flags["beat:tiedun"] = true;
+    out.prize = prizeFor(state.day, rank);
+    out.reputation = reputationFor(kind, sport, rank);
+    if (rank === 1) {
+      const star = field.find((f) => !f.mine && STORY_HORSES.includes(f.name));
+      if (star) state.flags[`beat:${star.name}`] = true;
+      if (star?.name === "铁墩") state.flags["beat:tiedun"] = true;
+      if (kind === "cup") state.cupWon = true;
+    }
   }
-  if (out.prize) earn(state, kind === "race" ? `平地赛第 ${out.myRank} 名` : kind === "boss" ? "擂台奖金" : "相扑奖金", out.prize);
+  if (out.prize) earn(state, sport === "race" && kind !== "boss" ? `${EVENT_LABELS[kind]}第 ${out.myRank} 名` : `${EVENT_LABELS[kind]}奖金`, out.prize);
   state.reputation += out.reputation;
   const bet = state.bet;
   if (bet && bet.day === state.day) {
@@ -619,18 +792,72 @@ export interface NightReport {
   sequenced: StableHorse[];
   grownUp: StableHorse[];
   debtPaid: number;
-  /** 还不上债，游戏结束。 */
+  /** 这一晚还不上，马董给了宽限。 */
+  grace: Grace | null;
+  /** 宽限过后还是还不上（或第二次还不上），牧场被收走。 */
   ruined: boolean;
+  /** 这一晚定下的结局。 */
+  ending: Ending | null;
+}
+
+/** 宽限的利息：三天后连本带利多两成。 */
+export const GRACE_DAYS = 3;
+export const GRACE_RATE = 1.2;
+
+/** 夜里还债：先还到期的宽限，再还这周的；还不上第一次给宽限，第二次收牧场。四笔还清定结局。 */
+function settleDebt(state: GameState, day: number, report: NightReport): void {
+  if (state.ending) return;
+  const ruin = (): void => {
+    report.ruined = true;
+    state.over = true;
+    state.ending = "mascot";
+    report.ending = "mascot";
+  };
+  const g = state.grace;
+  if (g && g.dueDay <= day) {
+    if (!spend(state, "还债（宽限）", g.amount)) return ruin();
+    report.debtPaid += g.amount;
+    state.grace = null;
+    state.debtsPaid++;
+  }
+  const due = (DEBT_DAYS as readonly number[]).includes(day) ? debtDue(day) : 0;
+  if (due > 0) {
+    if (spend(state, "还债", due)) {
+      report.debtPaid += due;
+      state.debtsPaid++;
+    } else if (!state.graceUsed && day < 31) {
+      state.graceUsed = true;
+      state.grace = { amount: Math.round((due * GRACE_RATE) / 10) * 10, dueDay: day + GRACE_DAYS };
+      report.grace = state.grace;
+    } else return ruin();
+  }
+  if (state.debtsPaid >= DEBT_SCHEDULE.length) {
+    state.ending = state.cupWon ? "tianma" : "kept";
+    report.ending = state.ending;
+  }
+}
+
+/** K 博士在擂台前一晚，照着全镇（包括你）战绩最好的那匹马复制出「样本七号」。 */
+export function copyBestForK(state: GameState): void {
+  const sample = state.rivals.find((r) => r.name === "样本七号");
+  if (!sample) return;
+  const score = (p: PublicRecord): number => p.wins * 3 + p.podiums + p.sumoWins * 2;
+  const pool: Array<{ genome: Genome; wingGenes?: readonly [0 | 1, 0 | 1]; pub: PublicRecord }> = [...state.horses, ...state.rivals.filter((r) => !["样本七号", CUP.horse].includes(r.name))];
+  const best = pool.reduce((a, b) => (score(b.pub) > score(a.pub) ? b : a), pool[0]!);
+  sample.genome = JSON.parse(JSON.stringify(best.genome)) as Genome;
+  sample.wingGenes = [...(best.wingGenes ?? [0, 0])] as [0 | 1, 0 | 1];
 }
 
 /** 睡觉：结算饲料、生小马、出测序结果、周日还债，然后进入第二天清晨。 */
 export function sleep(state: GameState): NightReport {
+  if (state.performance) throw new Error("先完成正在进行的演出");
+  if (state.over) throw new Error("牧场已经交接");
   const day = state.day;
   for (const h of state.horses) {
     const p = express(h.genome);
     spend(state, `饲料 ${h.name}`, Math.min(state.money, feedCost(p.size, p.power, isFoal(h, day))));
   }
-  const report: NightReport = { day, ledger: [], foals: [], sequenced: [], grownUp: [], debtPaid: 0, ruined: false };
+  const report: NightReport = { day, ledger: [], foals: [], sequenced: [], grownUp: [], debtPaid: 0, grace: null, ruined: false, ending: null };
 
   const next = day + 1;
   for (const preg of state.pregnancies.filter((p) => p.dueDay <= next)) {
@@ -638,15 +865,21 @@ export function sleep(state: GameState): NightReport {
     const sire = findHorse(state, preg.sireId);
     if (!dam || !sire) continue;
     const rng = rngFor(state, `foal:${dam.id}:${sire.id}`);
-    const { genome, mutations } = breed(dam.genome, sire.genome, rng);
+    const { genome, mutations } = breed(preg.snapshots?.[0] ?? dam.genome, preg.snapshots?.[1] ?? sire.genome, rng);
     const taken = new Set(state.horses.map((h) => h.name).concat(state.rivals.map((r) => r.name)));
-    const foal = createHorse(horseName(rng, taken), genome, {
+    const name=next===4&&!taken.has("小板凳")?"小板凳":horseName(rng,taken);
+    const foal = createHorse(name, genome, {
       generation: Math.max(dam.generation, sire.generation) + 1,
       parents: [dam.name, sire.name],
+      parentIds: [dam.id, sire.id],
+      wingGenes: preg.wings ?? [0, 0],
       mutations: [...mutations],
       bornDay: next,
     });
     state.horses.push(foal);
+    state.archive.push(foal);
+    if (preg.prepared) state.flags[`chimera:${foal.id}`] = true;
+    if (foal.wingGenes.includes(1) && express(foal.genome).compat >= 1) state.flags[`wings:${foal.id}`] = true;
     report.foals.push(foal);
   }
   state.pregnancies = state.pregnancies.filter((p) => p.dueDay > next);
@@ -655,20 +888,13 @@ export function sleep(state: GameState): NightReport {
       h.sequencing = false;
       h.sequenced = true;
       report.sequenced.push(h);
+      state.flags.genes = true;
     }
     if (h.bornDay > 0 && h.bornDay + FOAL_DAYS === next) report.grownUp.push(h);
   }
 
-  const due = day % 7 === 0 ? debtDue(day) : 0;
-  if (due > 0) {
-    if (state.money >= due) {
-      spend(state, "还债", due);
-      report.debtPaid = due;
-    } else {
-      report.ruined = true;
-      state.over = true;
-    }
-  }
+  settleDebt(state, day, report);
+  if (bossFor(next)?.horse === "样本七号") copyBestForK(state);
 
   report.ledger = state.ledger;
   state.ledger = [];

@@ -36,11 +36,11 @@ export class HorsePuppet {
   private acc = 0;
   private readonly seed: number;
 
-  constructor(id: string, name: string, genome: Genome, x: number, z: number, scale = 1) {
+  constructor(id: string, name: string, genome: Genome, x: number, z: number, scale = 1, wings = false) {
     this.id = id;
     this.name = name;
     this.genome = genome;
-    this.plan = bodyPlanFrom(express(genome));
+    this.plan = bodyPlanFrom(express(genome), wings);
     this.x = x;
     this.z = z;
     this.tx = x;

@@ -12,7 +12,8 @@ describe("基因 → 身体", () => {
     for (const g of many) {
       const plan = bodyPlanFrom(express(g));
       for (const [k, v] of Object.entries(plan)) {
-        expect(Number.isFinite(v), k).toBe(true);
+        if (k === "wings") expect(typeof v).toBe("boolean");
+        else expect(Number.isFinite(v), k).toBe(true);
       }
       for (const k of ["torsoLength", "torsoHeight", "torsoMass", "legFront", "legRear", "legWidth", "legMass", "hoofRadius", "neckLength", "headMass", "hipTorque", "gaitHz", "topSpeed", "acceleration", "stamina"] as const) {
         expect(plan[k], k).toBeGreaterThan(0);

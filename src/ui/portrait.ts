@@ -14,11 +14,11 @@ interface Snapshot {
 const cache = new Map<string, Snapshot>();
 
 /** 让马在物理世界里站稳，拍一张静止姿态。按马码缓存。 */
-function snapshot(genome: Genome): Snapshot {
-  const key = encodeGenome(genome);
+function snapshot(genome: Genome, wings: boolean): Snapshot {
+  const key = encodeGenome(genome) + (wings ? ":wings" : "");
   const hit = cache.get(key);
   if (hit) return hit;
-  const race = new Race([{ id: "p", name: "p", genome }], { distance: 10, seed: 1, timeLimit: 1, startAt: Infinity });
+  const race = new Race([{ id: "p", name: "p", genome, wings }], { distance: 10, seed: 1, timeLimit: 1, startAt: Infinity });
   for (let i = 0; i < 50; i++) race.step();
   const shot = { pose: race.poses()[0] as HorsePose, plan: race.runners[0]!.horse.plan };
   cache.set(key, shot);
@@ -39,7 +39,7 @@ const boxes = new Map<string, Box>();
 
 /** 先在一张大画布上画一遍，量出马实际占的范围（米），小像按这个范围取景。 */
 function measure(genome: Genome, shot: Snapshot, look: ReturnType<typeof lookFor>): Box {
-  const key = encodeGenome(genome);
+  const key = encodeGenome(genome) + (shot.plan.wings ? ":wings" : "");
   const hit = boxes.get(key);
   if (hit) return hit;
   const S = 40;
@@ -70,7 +70,7 @@ function measure(genome: Genome, shot: Snapshot, look: ReturnType<typeof lookFor
 }
 
 /** 画一张马的像素小像：透明背景，马居中，描一圈深色边。bust：只取头颈，给工具栏的小格子用。 */
-export function drawPortrait(canvas: HTMLCanvasElement, genome: Genome, time: TimeOfDay, bust = false): void {
+export function drawPortrait(canvas: HTMLCanvasElement, genome: Genome, time: TimeOfDay, bust = false, wings = false): void {
   const cssW = canvas.clientWidth || Number(canvas.getAttribute("width")) || 96;
   const cssH = canvas.clientHeight || Number(canvas.getAttribute("height")) || 72;
   const W = Math.max(8, Math.round(cssW / PIXEL));
@@ -80,7 +80,7 @@ export function drawPortrait(canvas: HTMLCanvasElement, genome: Genome, time: Ti
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.clearRect(0, 0, W, H);
-  const shot = snapshot(genome);
+  const shot = snapshot(genome, wings);
   const look = lookFor(shot.plan, PALETTES[time].rim);
   const b = measure(genome, shot, look);
   const w = b.x1 - b.x0;
