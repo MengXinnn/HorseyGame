@@ -347,7 +347,7 @@ export function serialize(state: GameState): string {
 
 export function deserialize(text: string): GameState | null {
   try {
-    const raw = JSON.parse(text) as Omit<GameState, "horses" | "rivals" | "archive"> & { horses: Saved<StableHorse>[]; archive?: Saved<StableHorse>[]; rivals: Saved<RivalHorse>[] };
+    const raw = JSON.parse(text) as Omit<GameState, "version" | "horses" | "rivals" | "archive"> & { version: number; horses: Saved<StableHorse>[]; archive?: Saved<StableHorse>[]; rivals: Saved<RivalHorse>[] };
     if (![2, 3, 4].includes(raw.version)) return null;
     if (!Array.isArray(raw.horses) || !Array.isArray(raw.rivals)) return null;
     const unpack = <T>(list: Saved<T>[]): T[] => {
@@ -364,6 +364,11 @@ export function deserialize(text: string): GameState | null {
     const rivals = unpack<RivalHorse>(raw.rivals);
     // 第2版存档没有剧情：从当前日期的事件继续，不补演已经过去的章节。
     const story: StoryState = raw.story ? { ...newStory(), ...raw.story } : { ...newStory(), quest: RESUME, inbox: [] };
+    // v2在7/14/21/28日晚强制还款；存档日期已经进入次晨。
+    // 失败旧档的最后一笔并未支付，显式保存的进度则始终优先。
+    const paymentDays = raw.version === 2 ? [7, 14, 21, 28] : DEBT_DAYS;
+    const passedPayments = paymentDays.filter(day => day < raw.day).length;
+    const debtsPaid = raw.debtsPaid ?? Math.max(0, passedPayments - (raw.version === 2 && raw.over ? 1 : 0));
     return {
       ...fresh,
       ...raw,
@@ -372,7 +377,7 @@ export function deserialize(text: string): GameState | null {
       archive: [...horses, ...unpack<StableHorse>(raw.archive ?? []).filter(h => !horses.some(live => live.id === h.id))],
       rivals: rivals.length ? ensureStoryRivals(rivals) : fresh.rivals,
       story,
-      debtsPaid: raw.debtsPaid ?? DEBT_DAYS.filter((d) => d < raw.day).length,
+      debtsPaid,
       flags: raw.day > 1 ? { ...raw.flags, intro: true } : raw.flags ?? {},
       walked: raw.walked ?? 0,
       selectedId: horses.some((h) => h.id === raw.selectedId) ? raw.selectedId : horses[0]!.id,
@@ -807,6 +812,15 @@ export const GRACE_RATE = 1.2;
 /** 夜里还债：先还到期的宽限，再还这周的；还不上第一次给宽限，第二次收牧场。四笔还清定结局。 */
 function settleDebt(state: GameState, day: number, report: NightReport): void {
   if (state.ending) return;
+  const finish = (): void => {
+    state.ending = state.cupWon ? "tianma" : "kept";
+    report.ending = state.ending;
+  };
+  // 已还清的迁移存档可能尚无新版结局，不能仅靠ending阻止重复收款。
+  if (state.debtsPaid >= DEBT_SCHEDULE.length) {
+    finish();
+    return;
+  }
   const ruin = (): void => {
     report.ruined = true;
     state.over = true;
@@ -832,8 +846,7 @@ function settleDebt(state: GameState, day: number, report: NightReport): void {
     } else return ruin();
   }
   if (state.debtsPaid >= DEBT_SCHEDULE.length) {
-    state.ending = state.cupWon ? "tianma" : "kept";
-    report.ending = state.ending;
+    finish();
   }
 }
 

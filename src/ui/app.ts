@@ -34,6 +34,7 @@ import {
   betPayout,
   daysUntilDebt,
   debtDue,
+  DEBT_SCHEDULE,
   ENTRY_FEE,
   EVENT_LABELS,
   EVENT_TIME,
@@ -299,7 +300,7 @@ export function startApp(root: HTMLElement): void {
     const due = debtDue(game.day);
     const left = daysUntilDebt(game.day);
     const debt = $("#h-debt");
-    debt.hidden = due <= 0 || game.ending !== null || (game.day === 1 && !game.flags["met:madong"]);
+    debt.hidden = due <= 0 || game.debtsPaid >= DEBT_SCHEDULE.length || game.ending !== null || (game.day === 1 && !game.flags["met:madong"]);
     debt.classList.toggle("urgent", left <= 1);
     debt.title = `第${cn(weekOf(game.day))}周要还给马董`;
     const grace = game.grace;

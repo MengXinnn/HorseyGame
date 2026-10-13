@@ -22,10 +22,26 @@ import {
   type GameState,
 } from "../src/game/state";
 import { encodeGenome, randomGenome } from "../src/genome/genome";
-import { BOSS_PRIZE, DAY_START, debtDue, ENTRY_FEE, eventFor, RACE_PRIZES, SEQUENCING_FEE, START_MONEY } from "../src/game/season";
+import { BOSS_PRIZE, DAY_START, debtDue, ENTRY_FEE, eventFor, feedCost, RACE_PRIZES, SEQUENCING_FEE, START_MONEY } from "../src/game/season";
+import { express } from "../src/genome/genome";
 import { createRng } from "../src/sim/rng";
 
 const ids = (g: GameState): [string, string] => [g.horses[0]!.id, g.horses[1]!.id];
+
+/** v2没有剧情、宽限、结局或已还款计数，只有每周强制结算后的日期。 */
+function v2Save(day: number, over = false): string {
+  const raw = JSON.parse(serialize(newGame()));
+  raw.version = 2;
+  raw.day = day;
+  raw.money = 1000;
+  raw.over = over;
+  for (const key of ["archive", "story", "grace", "graceUsed", "debtsPaid", "cupWon", "ending", "performance"]) delete raw[key];
+  for (const horse of raw.horses) {
+    delete horse.rest.parentIds;
+    delete horse.rest.wingGenes;
+  }
+  return JSON.stringify(raw);
+}
 
 describe("存档", () => {
   it("新档：流星和磐石，三百块，第一天清晨", () => {
@@ -55,6 +71,72 @@ describe("存档", () => {
   it("坏存档返回 null", () => {
     expect(deserialize("{")).toBeNull();
     expect(deserialize(JSON.stringify({ version: 1, horses: [] }))).toBeNull();
+  });
+
+  it.each([29, 30, 31])("v2第%d天已付第四笔，迁移和再次读档后只扣草料", (day) => {
+    let g = deserialize(v2Save(day))!;
+    expect(g.debtsPaid).toBe(4);
+    expect(g.money).toBe(1000);
+    while (g.day <= 32) {
+      g = deserialize(serialize(g))!;
+      const money = g.money;
+      const feed = g.horses.reduce((sum, h) => {
+        const p = express(h.genome);
+        return sum + feedCost(p.size, p.power, isFoal(h, g.day));
+      }, 0);
+      const report = sleep(g);
+      expect(report.debtPaid).toBe(0);
+      expect(report.grace).toBeNull();
+      expect(report.ruined).toBe(false);
+      expect(report.ledger.some(line => line.label.startsWith("还债"))).toBe(false);
+      expect(g.money).toBe(money - feed);
+      expect(g.debtsPaid).toBe(4);
+      expect(g.over).toBe(false);
+    }
+    expect(g.ending).toBe("kept");
+  });
+
+  it("v2第28天尚未付第四笔，迁移后在31日付一次三万元", () => {
+    const g = deserialize(v2Save(28))!;
+    expect(g.debtsPaid).toBe(3);
+    g.money = 100_000;
+    for (const day of [28, 29, 30, 31]) {
+      const report = sleep(g);
+      expect(report.day).toBe(day);
+      expect(report.debtPaid).toBe(day === 31 ? 30000 : 0);
+      expect(g.debtsPaid).toBe(day === 31 ? 4 : 3);
+    }
+    expect(sleep(g).debtPaid).toBe(0);
+  });
+
+  it.each([[7, 0], [8, 1], [14, 1], [15, 2], [21, 2], [22, 3]])("v2第%d天只继承此前已经完成的还款", (day, paid) => {
+    expect(deserialize(v2Save(day))?.debtsPaid).toBe(paid);
+  });
+
+  it("v2第28日晚失败的存档保留失败，不把未付第四笔记为已付", () => {
+    const g = deserialize(v2Save(29, true))!;
+    expect(g.over).toBe(true);
+    expect(g.debtsPaid).toBe(3);
+  });
+
+  it("新版31日待还款和显式保存的已还款进度不被旧规则覆盖", () => {
+    const g = newGame();g.day = 31;g.debtsPaid = 3;g.money = 100_000;
+    const raw = JSON.parse(serialize(g));
+    for (const version of [3, 4]) {
+      raw.version = version;
+      const restored = deserialize(JSON.stringify(raw))!;
+      expect(restored.debtsPaid).toBe(3);
+      expect(sleep(restored).debtPaid).toBe(30000);
+    }
+  });
+
+  it("即使已还清存档尚无结局，31日也不能再收第四笔", () => {
+    const g = newGame();g.day = 31;g.debtsPaid = 4;g.money = 1000;g.cupWon = true;
+    const report = sleep(g);
+    expect(report.debtPaid).toBe(0);
+    expect(report.ruined).toBe(false);
+    expect(report.ending).toBe("tianma");
+    expect(g.debtsPaid).toBe(4);
   });
 });
 
