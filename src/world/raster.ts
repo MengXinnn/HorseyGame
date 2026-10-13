@@ -26,6 +26,8 @@ const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 export const bayer = (x: number, y: number): number => (BAYER[(y & 3) * 4 + (x & 3)]! + 0.5) / 16;
 
 type Color = string | number;
+const scanXs: number[] = [];
+const byValue = (a: number, b: number): number => a - b;
 const col = (c: Color): number => (typeof c === "number" ? c : rgb(c));
 
 export class Raster {
@@ -97,28 +99,36 @@ export class Raster {
       }
   }
 
-  /** 扫描线填多边形（取像素中心判断），没有抗锯齿。 */
-  poly(pts: Array<[number, number]>, c: Color): void {
+  /** 扫描线填多边形（取像素中心判断），没有抗锯齿。(ox, oy) 是先从各点减去的偏移。 */
+  poly(pts: ReadonlyArray<readonly [number, number]>, c: Color, ox = 0, oy = 0): void {
     const v = col(c);
+    const opaque = v >>> 24 === 255 || v >>> 24 === 0;
     let minY = Infinity;
     let maxY = -Infinity;
-    for (const [, y] of pts) {
-      minY = Math.min(minY, y);
-      maxY = Math.max(maxY, y);
+    for (const p of pts) {
+      minY = Math.min(minY, p[1] - oy);
+      maxY = Math.max(maxY, p[1] - oy);
     }
+    const xs = scanXs;
     for (let y = Math.max(0, Math.floor(minY)); y <= Math.min(this.h - 1, Math.ceil(maxY)); y++) {
       const cy = y + 0.5;
-      const xs: number[] = [];
+      xs.length = 0;
       for (let i = 0; i < pts.length; i++) {
-        const [ax, ay] = pts[i]!;
-        const [bx, by] = pts[(i + 1) % pts.length]!;
-        if (ay <= cy !== by <= cy) xs.push(ax + ((cy - ay) / (by - ay)) * (bx - ax));
+        const a = pts[i]!;
+        const b = pts[(i + 1) % pts.length]!;
+        const ay = a[1] - oy;
+        const by = b[1] - oy;
+        if (ay <= cy !== by <= cy) xs.push(a[0] - ox + ((cy - ay) / (by - ay)) * (b[0] - a[0]));
       }
-      xs.sort((a, b) => a - b);
+      xs.sort(byValue);
       for (let i = 0; i + 1 < xs.length; i += 2) {
         const x0 = Math.round(xs[i]!);
         const x1 = Math.round(xs[i + 1]!);
-        for (let x = x0; x < x1; x++) this.px(x, y, v);
+        if (opaque) {
+          const l = Math.max(0, x0);
+          const r = Math.min(this.w, x1);
+          if (r > l) this.data.fill(v, y * this.w + l, y * this.w + r);
+        } else for (let x = x0; x < x1; x++) this.px(x, y, v);
       }
     }
   }

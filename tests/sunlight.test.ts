@@ -34,7 +34,16 @@ describe("世界日照", () => {
       expect(raster.get(x!, z!) !== 0).toBe(blocksSun(house, sun, x! + 0.5, z! + 0.5));
   });
 
-  it("悬空树冠的投影保留高度，不当成落地的墙", () => {
+  it("带偏移填多边形等同于先平移各点", () => {
+    const polygon = shadowPolygon(house, sun);
+    const shifted = new Raster(90, 60);
+    shifted.poly(polygon.map(([x, z]): [number, number] => [x - 7, z - 5]), "#ffffff");
+    const offset = new Raster(90, 60);
+    offset.poly(polygon, "#ffffff", 7, 5);
+    expect(offset.data).toEqual(shifted.data);
+  });
+
+    it("悬空树冠的投影保留高度，不当成落地的墙", () => {
     const tree: SunCaster = { id: "tree", footprint: roundFootprint(0, 0, 5), bottom: 20, height: 40 };
     const lowSun = { dx: 1, dz: 0, power: 1 };
     expect(blocksSun(tree, lowSun, 0, 0)).toBe(false);
