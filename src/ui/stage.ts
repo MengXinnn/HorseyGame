@@ -9,6 +9,8 @@ import { STEP, type Race } from "../sim/race";
 import { hashSeed } from "../sim/rng";
 import { lightSprite } from "../world/lighting";
 import { drawPixelHorse, PixelSurface, pixelBox, pixelText, PX } from "./pixelCanvas";
+import { drawCharacter, drawProp } from "../render/storyAssets";
+import { groundHeight, TERRAIN_LABELS, terrainAt } from "../sim/terrain";
 
 /** 看台离镜头比最后一条泳道还远一点，按这个比例慢一些地滚动（视差）。 */
 const CROWD_DEPTH = 0.8;
@@ -17,7 +19,7 @@ const SECTION = 24;
 
 const NECK_ANGLE = 0.95;
 
-export type StageMode = "preview" | "trial" | "race";
+export type StageMode = "preview" | "trial" | "race" | "circus";
 
 interface Dust {
   lane: number;
@@ -35,6 +37,8 @@ export interface StageOptions {
   player: number;
   onFinish?: (race: Race) => void;
   onTick?: (race: Race) => void;
+  title?: string;
+  program?: "haul" | "jump" | "balance";
 }
 
 /**
@@ -184,6 +188,13 @@ export class Stage {
     if (mode === "race" && race) this.drawRaceTrack(views, race, palette, horizon);
     else drawTrackDetails(ctx, W, H, this.time, this.camX * front.ppm, front.groundY, front.ppm * 2.5, PX);
     if (mode === "trial") this.drawMeterMarks(front, palette.rim);
+    if (race?.options.terrains) this.drawTerrain(front, race, H);
+    if (mode === "circus") {
+      drawProp(ctx,0,W*0.83,H*0.66,Math.min(380,H*0.65));
+      drawProp(ctx,7,W*0.26,H*0.65,Math.min(250,H*0.4));
+      if(this.opts.program==="jump")drawProp(ctx,5,W*0.68,H*0.87,Math.min(170,H*0.27));
+      if(this.opts.program==="balance")drawProp(ctx,6,W*0.57,H*0.93,Math.min(220,H*0.34));
+    }
 
     if (!race) {
       this.surface.present();
@@ -200,9 +211,20 @@ export class Stage {
       // 远处的马淡一点，突出玩家的马。
       const bubble = drawPixelHorse(ctx, pose, r.horse.plan, look, view, mode === "race" ? 1 - 0.05 * lane : 1);
       if (bubble) bubbles.push(bubble);
+      if(mode==="circus"&&this.opts.program==="haul"){
+        const [hx,hy]=toScreen(view,pose.torso);
+        drawProp(ctx,4,hx-view.ppm*3,view.groundY,view.ppm*2.5);
+        ctx.strokeStyle="#b69467";ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(hx-view.ppm*1.9,hy);ctx.lineTo(hx-view.ppm*0.4,hy);ctx.stroke();
+      }
     }
+    if (mode === "circus") drawCharacter(ctx,"米娅",Math.floor(this.wall*2)%3===2?2:1,W*0.93,H*0.92,Math.min(210,H*0.27));
     if (mode === "race") this.drawForeground(front, palette);
     const screen = this.surface.present();
+    if(this.opts.title)pixelText(screen,this.opts.title,W/2,30,{color:"#fbefd4",align:"center"});
+    if(race.options.terrains&&player){
+      const terrain=terrainAt(race.progress(player),race.options.distance,race.options.terrains);
+      pixelText(screen,TERRAIN_LABELS[terrain],W/2,66,{color:"#efcf7f",align:"center"});
+    }
     for (const b of bubbles) thinkBubble(screen, b.x, b.y, b.text, 2);
     for (const l of this.labels) pixelText(screen, l.text, l.x, l.y, { color: l.color, align: "center" });
     if (mode === "race")
@@ -211,6 +233,37 @@ export class Stage {
         this.drawTag(screen, view, r.horse.pose(), r.horse.plan, r.entrant.name, i === this.opts.player);
       }
     this.drawHud(screen, W, race);
+  }
+
+  /** 画面与碰撞面使用同一个高度函数，低枝也放在实际碰撞的位置。 */
+  private drawTerrain(view: View, race: Race, H: number): void {
+    const c = this.ctx;
+    const terrains = race.options.terrains!;
+    const distance = race.options.distance;
+    const colors = { grass: "#819760", wetland: "#647e76", hill: "#9c9965", coast: "#c5b48b", forest: "#657951", mountain: "#d9e1dc" };
+    const left = Math.floor(this.camX - view.width / view.ppm);
+    const right = Math.ceil(this.camX + view.width / view.ppm);
+    for (let x = left; x < right; x += 0.5) {
+      const terrain = terrainAt(x, distance, terrains);
+      const [sx, sy] = toScreen(view, { x, y: groundHeight(x, distance, terrains) });
+      const [ex, ey] = toScreen(view, { x: x + 0.5, y: groundHeight(x + 0.5, distance, terrains) });
+      c.fillStyle = colors[terrain];
+      c.beginPath();c.moveTo(sx, sy);c.lineTo(ex, ey);c.lineTo(ex, H);c.lineTo(sx, H);c.fill();
+      c.fillStyle = terrain === "mountain" ? "#f0f4e9" : terrain === "wetland" ? "#9fbcb6" : "#b5bc7d";
+      c.fillRect(Math.round(sx), Math.round(sy), Math.ceil(ex-sx), 3);
+      if ((terrain === "wetland" || terrain === "coast") && Math.floor(x * 2) % 4 === 0) {
+        c.fillStyle = "#8cbcc1";c.fillRect(Math.round(sx), Math.round(sy + 15), 14, 3);
+      }
+    }
+    for (let x = 8; x < distance; x += 15) {
+      if (x < left - 4 || x > right + 4 || terrainAt(x, distance, terrains) !== "forest") continue;
+      const [sx, sy] = toScreen(view, { x, y: 2.3 });
+      c.fillStyle = "#6b4b30";c.fillRect(Math.round(sx), Math.round(sy), view.ppm * 3, 9);
+      c.fillStyle = "#385c42";c.fillRect(Math.round(sx + 9), Math.round(sy - 12), view.ppm * 2, 12);
+    }
+    const current = terrainAt(this.camX, distance, terrains);
+    if (current === "coast") drawProp(c, 10, view.width * 0.83, view.groundY - 40, 190);
+    if (current === "mountain") drawProp(c, 9, view.width * 0.82, view.groundY - 40, 190);
   }
 
   /**

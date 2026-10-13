@@ -7,6 +7,7 @@ import { metabolicBudget } from "../genome/traits";
  * 尺寸不会为零或无限大，所以任何基因组都能被稳定模拟。
  */
 export interface BodyPlan {
+  wings?: boolean;
   scale: number;
   torsoLength: number;
   torsoHeight: number;
@@ -54,7 +55,7 @@ export interface BodyPlan {
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
-export function bodyPlanFrom(p: Phenotype): BodyPlan {
+export function bodyPlanFrom(p: Phenotype, wings = false): BodyPlan {
   const scale = clamp(1 + 0.12 * p.size, 0.72, 1.3);
   const torsoLength = 1.7 * scale * (1 + 0.08 * p.torso);
   const torsoHeight = 0.72 * scale * (1 + 0.15 * p.girth);
@@ -65,7 +66,7 @@ export function bodyPlanFrom(p: Phenotype): BodyPlan {
   const legMass = clamp(torsoMass * 0.035, torsoMass / 10, torsoMass);
   const headMass = clamp(torsoMass * 0.09 * (1 + 0.25 * p.head), torsoMass / 10, torsoMass / 2);
   const legAvg = (legFront + legRear) / 2;
-  const budget = metabolicBudget(p);
+  const budget = metabolicBudget(p, wings ? 18 : 0);
 
   // 力量和体重成正比，再乘以肌力系数：大马不会因为太重而站不起来。
   const muscle = 1 + 0.22 * p.power;
@@ -84,6 +85,7 @@ export function bodyPlanFrom(p: Phenotype): BodyPlan {
   const acceleration = clamp(5 * (1 + 0.22 * p.power) * (1 - 0.06 * p.size), 2, 9);
 
   return {
+    wings,
     scale,
     torsoLength,
     torsoHeight,

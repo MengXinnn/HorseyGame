@@ -3,6 +3,7 @@ import { bodyPlanFrom } from "../body/bodyPlan";
 import { express, type Genome } from "../genome/genome";
 import { CATEGORY_GROUND, HorseSim, type HorsePose } from "./horse";
 import { createRng, type Rng } from "./rng";
+import { groundHeight, terrainAt, TERRAIN_FRICTION, type Terrain } from "./terrain";
 
 export const STEP = 1 / 60;
 const SETTLE_TIME = 1.0;
@@ -13,6 +14,7 @@ export interface Entrant {
   id: string;
   name: string;
   genome: Genome;
+  wings?: boolean;
 }
 
 export interface RaceOptions {
@@ -22,6 +24,11 @@ export interface RaceOptions {
   timeLimit: number;
   gravity?: number;
   groundFriction?: number;
+  /** 迎面风（米/秒²），把马往后推。 */
+  wind?: number;
+  /** 看台上的人多：胆小的马发呆的机会乘这个倍数。 */
+  crowd?: number;
+  terrains?: readonly Terrain[];
   /** 发令时间（秒）；之前马原地站稳。Infinity 表示只站着不跑（马厩展示用）。 */
   startAt?: number;
 }
@@ -42,6 +49,7 @@ export interface RaceResult {
   falls: number;
   stalls: number;
   stumbles: number;
+  flightTime: number;
 }
 
 /**
@@ -58,16 +66,28 @@ export class Race {
   constructor(entrants: Entrant[], options: RaceOptions) {
     this.options = options;
     this.rng = createRng(options.seed);
-    this.world = new World({ gravity: new Vec2(0, -(options.gravity ?? 9.8)) });
+    this.world = new World({ gravity: new Vec2(-(options.wind ?? 0), -(options.gravity ?? 9.8)) });
     const ground = this.world.createBody({ type: "static" });
-    ground.createFixture(new Edge(new Vec2(-50, 0), new Vec2(options.distance + 200, 0)), {
+    const height = (x: number): number => groundHeight(x, options.distance, options.terrains ?? ["grass"]);
+    const fixture = {
       friction: options.groundFriction ?? 1,
       filterCategoryBits: CATEGORY_GROUND,
       filterMaskBits: 0xffff,
-    });
+    };
+    if (options.terrains?.includes("hill")) {
+      for (let x = -50; x < options.distance + 200; x += 2) ground.createFixture(new Edge(new Vec2(x, height(x)), new Vec2(x + 2, height(x + 2))), fixture);
+    } else ground.createFixture(new Edge(new Vec2(-50, 0), new Vec2(options.distance + 200, 0)), fixture);
+    if (options.terrains?.includes("forest")) {
+      for (let x = 8; x < options.distance; x += 15) {
+        if (terrainAt(x, options.distance, options.terrains) === "forest") ground.createFixture(new Edge(new Vec2(x, 2.3), new Vec2(x + 3, 2.3)), fixture);
+      }
+    }
     this.runners = entrants.map((entrant, i) => {
-      const plan = bodyPlanFrom(express(entrant.genome));
+      const plan = bodyPlanFrom(express(entrant.genome), entrant.wings);
+      if (options.crowd) plan.stallPerSecond *= options.crowd;
       const horse = new HorseSim(this.world, plan, 0, i + 1, createRng(this.rng.int(1, 2 ** 31)));
+      horse.groundHeight = height;
+      horse.groundFriction = options.groundFriction ?? 1;
       return { entrant, horse, startX: horse.x, finishTime: null };
     });
   }
@@ -97,6 +117,15 @@ export class Race {
     const go = this.started;
     for (const r of this.runners) {
       r.horse.active = go && r.finishTime === null;
+      if (this.options.terrains) {
+        const terrain = terrainAt(this.progress(r), this.options.distance, this.options.terrains);
+        r.horse.groundFriction = (this.options.groundFriction ?? 1) * TERRAIN_FRICTION[terrain];
+        if (go && (terrain === "wetland" || terrain === "coast")) {
+          const plan = r.horse.plan;
+          const drag = terrain === "wetland" ? Math.max(0.08, 0.5 - plan.hoofRadius * 2) : 0.08 + plan.torsoHeight * 0.1;
+          r.horse.torso.applyForceToCenter(new Vec2(-r.horse.torso.getLinearVelocity().x * plan.totalMass * drag, 0), true);
+        }
+      }
       r.horse.step(STEP);
     }
     this.world.step(STEP, 8, 3);
@@ -128,6 +157,7 @@ export class Race {
       falls: r.horse.falls,
       stalls: r.horse.stalls,
       stumbles: r.horse.stumbles,
+      flightTime: r.horse.flightTime,
     }));
     rows.sort((a, b) => {
       if (a.time !== null && b.time !== null) return a.time - b.time;

@@ -27,6 +27,10 @@ export const T = {
   soil: 10,
   court: 11,
   clay: 12,
+  mud: 13,
+  rock: 14,
+  snow: 15,
+  forest: 16,
 } as const;
 export type TileKind = (typeof T)[keyof typeof T];
 
@@ -122,7 +126,7 @@ export const BUILDINGS: Building[] = [
   { id: "greenhouse", kind: "greenhouse", x: 128, z: 8, w: 7, d: 4 },
 ];
 
-export type InteractId = "sleep" | "barn" | "board" | "sequence" | "market" | "bookie" | "sumo" | "race" | "laozhao";
+export type InteractId = "sleep" | "mail" | "barn" | "board" | "sequence" | "market" | "bookie" | "sumo" | "race" | "laozhao" | "circus" | "wetland" | "hill" | "coast" | "forest" | "mountain";
 
 export interface Interactable {
   id: InteractId;
@@ -138,10 +142,12 @@ const door = (id: string): { x: number; z: number } => {
 };
 
 export const BOARD = { x: 23, z: 69 };
+export const MAILBOX = { x: 20.5, z: 69.5 };
 
 export const INTERACTS: Interactable[] = [
   { id: "sleep", ...door("home"), radius: 1.6, label: "睡觉" },
   { id: "barn", ...door("barn"), radius: 1.8, label: "配种" },
+  { id: "mail", x: MAILBOX.x, z: MAILBOX.z + 0.8, radius: 1.1, label: "信箱" },
   { id: "board", x: BOARD.x, z: BOARD.z + 0.8, radius: 1.3, label: "马码" },
   { id: "sequence", ...door("seq"), radius: 1.8, label: "测序" },
   { id: "market", ...door("market"), radius: 1.8, label: "马市" },
@@ -149,6 +155,12 @@ export const INTERACTS: Interactable[] = [
   { id: "sumo", x: RING.x, z: RING.z + RING.r + 0.8, radius: 1.8, label: "相扑" },
   { id: "race", ...door("booth"), radius: 1.6, label: "报名" },
   { id: "laozhao", x: LAOZHAO_SPOT.x, z: LAOZHAO_SPOT.z + 1, radius: 1.5, label: "老赵" },
+  { id: "circus", x: 85, z: 31, radius: 2, label: "红帐篷" },
+  { id: "wetland", x: 73, z: 76, radius: 2, label: "湿地" },
+  { id: "hill", x: 94, z: 76, radius: 2, label: "丘陵" },
+  { id: "coast", x: 131, z: 77, radius: 2, label: "海岸" },
+  { id: "forest", x: 79, z: 99, radius: 2, label: "林谷" },
+  { id: "mountain", x: 132, z: 99, radius: 2, label: "雪山" },
 ];
 
 export interface Region {
@@ -222,6 +234,11 @@ function buildGround(): Uint8Array {
     for (let z = r.z0; z < r.z1; z++) for (let x = r.x0; x < r.x1; x++) set(x, z, k);
   };
   fill(WILDS, T.meadow);
+  fill({ x0: 63, z0: 65, x1: 85, z1: 85 }, T.mud);
+  fill({ x0: 86, z0: 65, x1: 108, z1: 85 }, T.rock);
+  fill({ x0: 121, z0: 65, x1: 138, z1: 88 }, T.sand);
+  fill({ x0: 63, z0: 91, x1: 98, z1: 107 }, T.forest);
+  fill({ x0: 120, z0: 91, x1: 139, z1: 107 }, T.snow);
   fill(PADDOCK, T.paddock);
   fill(PLAZA, T.plaza);
   // 研究所门口一片水泥地。

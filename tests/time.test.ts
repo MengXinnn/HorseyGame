@@ -25,6 +25,7 @@ import { createRng } from "../src/sim/rng";
 const fresh = (): GameState => {
   const g = newGame();
   g.money = 5000;
+  g.day = 10;
   return g;
 };
 const [a, b] = [0, 1];

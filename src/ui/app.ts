@@ -1,18 +1,40 @@
 import { bodyPlanFrom } from "../body/bodyPlan";
-import { encodeGenome, express, type Genome } from "../genome/genome";
+import { express, type Genome } from "../genome/genome";
 import { LOCI, LOCUS_IDS } from "../genome/loci";
-import { displayStats } from "../genome/traits";
+import { displayStats, metabolicBudget } from "../genome/traits";
 import { coatFor } from "../render/color";
 import { Race, type RaceResult } from "../sim/race";
 import { hashSeed } from "../sim/rng";
 import { SumoBout } from "../sim/sumo";
-import { laozhaoLines, LETTER } from "../game/laozhao";
+import { CUP_CROWD, sportOf, WEATHER_PHYSICS, weatherFor } from "../game/calendar";
+import {
+  answerOffer,
+  DIARY,
+  DIARY_WHO,
+  FLASHBACK,
+  idleLines,
+  IOU_WHO,
+  nightLines,
+  nightReward,
+  offerPrelude,
+  offerPending,
+  PICKUP,
+  plaque,
+  queueEnding,
+  readMail,
+  storyEvent,
+  YOU,
+  type Line,
+  type Spot,
+  type StoryEvent,
+} from "../game/story";
 import {
   AFTER_EVENT,
   betLimit,
   betPayout,
   daysUntilDebt,
   debtDue,
+  DEBT_SCHEDULE,
   ENTRY_FEE,
   EVENT_LABELS,
   EVENT_TIME,
@@ -31,6 +53,7 @@ import {
   eventPending,
   findHorse,
   hasTime,
+  genesUnlocked,
   importHorse,
   isFoal,
   loadGame,
@@ -43,28 +66,37 @@ import {
   sellHorse,
   sellPrice,
   sendToSequencing,
+  sequencingFee,
+  sequencingOpen,
   sleep,
   STABLE_LIMIT,
   startTrial,
   todaysField,
   todaysOdds,
   waitForEvent,
+  type Ending,
   type EventOutcome,
   type GameState,
   type NightReport,
   type StableHorse,
 } from "../game/state";
-import { BUILDINGS, INTERACTS, MAP_H, MAP_W, RING, type InteractId } from "../world/tiles";
+import { BUILDINGS, INTERACTS, MAP_H, MAP_W, REGIONS, regionAt, RING, type InteractId } from "../world/tiles";
 import { MAP_PX } from "../world/minimap";
+import { NPC_BY_NAME, npcPortraitURL } from "../world/npcPortraits";
 import { WorldScene } from "../world/world";
-import { regionAt } from "../world/tiles";
 import { themeFor } from "../audio/score";
 import { WorldMusic } from "../audio/worldMusic";
 import { drawPortrait } from "./portrait";
 import { drawDial, ico, installPixelUI } from "./pixelui";
 import { portraitURL } from "../world/sprites";
 import { Stage } from "./stage";
+import { diaryHTML, endingHTML, mailHTML, playSlides, plaqueHTML } from "./storyView";
 import { SumoView } from "./sumoView";
+import { StoryStage } from "./storyStage";
+import { encodeHorseCode } from "../game/horseCode";
+import { completePerformance, doWork, editGene, hasWings, mountainSample, practiceRelay, prepareChimera, PROGRAMS, registerRelay, relayRace, relaySeconds, relayTeams, resumePerformance, startPerformance, WORK, type Program, type WorkId } from "../game/activities";
+import { RELAY_LEGS, TERRAIN_LABELS, type Terrain } from "../sim/terrain";
+import type { LocusId } from "../genome/loci";
 
 const TRIAL_SECONDS = 10;
 const RACE_TIME_LIMIT = 120;
@@ -96,15 +128,28 @@ const goldCells = (n: number): string => {
   return [...digits].map((d) => `<b class="cell">${d === " " ? "" : d}</b>`).join("");
 };
 
-const EVENT_ICON: Record<EventKind, "flag" | "ring" | "crown"> = { race: "flag", sumo: "ring", boss: "crown" };
+const EVENT_ICON: Record<EventKind, "flag" | "ring" | "crown"> = { race: "flag", sumo: "ring", boss: "crown", relay: "flag", cup: "crown" };
 
 /** 说话的人有头像的就配上。 */
-const PORTRAIT: Record<string, "laozhao" | "madong"> = { 老赵: "laozhao", 马董: "madong" };
+const faceOf = (name: string): string | null => {
+  if (name === "老赵") return portraitURL("laozhao");
+  if (name === "马董") return portraitURL("madong");
+  const npc = NPC_BY_NAME[name];
+  return npc ? npcPortraitURL(npc) : null;
+};
 
-const EVENT_GLYPH: Record<EventKind, string> = { race: "跑", sumo: "扑", boss: "擂" };
+const EVENT_GLYPH: Record<EventKind, string> = { race: "跑", sumo: "扑", boss: "擂", relay: "接", cup: "杯" };
 
-/** 场地的入口，赛后把人放回这里。 */
-const VENUE: Record<EventKind, InteractId> = { race: "race", sumo: "sumo", boss: "sumo" };
+/** 任务箭头指向的地方（格子坐标）。野原指向它的入口，人已经在野原就不指。 */
+const spotXZ = (spot: Spot, player: { x: number; z: number }): { x: number; z: number } | null => {
+  if (spot === "wilds") {
+    const r = REGIONS.find((g) => g.id === "wilds");
+    if (!r || regionAt(player.x, player.z)?.id === "wilds") return null;
+    return { x: r.rect.x0 + 2, z: (r.rect.z0 + r.rect.z1) / 2 };
+  }
+  const it = INTERACTS.find((i) => i.id === spot);
+  return it ? { x: it.x, z: it.z } : null;
+};
 
 type Actions = Record<string, (arg: string, el: HTMLElement) => void>;
 
@@ -143,6 +188,7 @@ export function startApp(root: HTMLElement): void {
           <div class="cb-gold" id="h-money" title="钱"></div>
           <div class="debt-note" id="h-debt"></div>
         </div>
+        <div class="quest" id="h-quest"></div>
         <div class="toolbar" id="toolbar"></div>
       </div>
       <div class="event-bar" id="event-bar" hidden>
@@ -194,7 +240,10 @@ export function startApp(root: HTMLElement): void {
       hud();
       const h = findHorse(game, id);
       if (h) showCaught(h, name);
+      story({ t: "catch" });
     },
+    onNear: (id) => story({ t: "near", id }),
+    onLasso: () => story({ t: "lasso" }),
     onToast: toast,
     onChange: () => {
       persist();
@@ -215,6 +264,7 @@ export function startApp(root: HTMLElement): void {
   stage.active = false;
   stage.time = "dusk";
   const sumoView = new SumoView(sumoCanvas);
+  const storyStage = new StoryStage(root.querySelector(".game")!);
 
   /* ---------------- HUD ---------------- */
 
@@ -250,14 +300,22 @@ export function startApp(root: HTMLElement): void {
     const due = debtDue(game.day);
     const left = daysUntilDebt(game.day);
     const debt = $("#h-debt");
-    debt.hidden = due <= 0;
+    debt.hidden = due <= 0 || game.debtsPaid >= DEBT_SCHEDULE.length || game.ending !== null || (game.day === 1 && !game.flags["met:madong"]);
     debt.classList.toggle("urgent", left <= 1);
     debt.title = `第${cn(weekOf(game.day))}周要还给马董`;
-    debt.innerHTML = `<i class="seal-chip">债</i><b>${due.toLocaleString("zh-CN")}</b><small>${left === 0 ? "今夜" : `${left}天`}</small>`;
+    const grace = game.grace;
+    debt.innerHTML = grace
+      ? `<i class="seal-chip">债</i><b>${grace.amount.toLocaleString("zh-CN")}</b><small>${grace.dueDay - game.day === 0 ? "今夜" : `${grace.dueDay - game.day}天`}</small>`
+      : `<i class="seal-chip">债</i><b>${due.toLocaleString("zh-CN")}</b><small>${left === 0 ? "今夜" : `${left}天`}</small>`;
+    if (grace) {
+      debt.hidden = false;
+      debt.classList.add("urgent");
+    }
     const place = world.regionName;
     const mmName = $("#mm-name");
     if (mmName.textContent !== place) mmName.textContent = place;
     mmName.hidden = !place;
+    questPlaque();
     toolbar();
   };
 
@@ -309,12 +367,29 @@ export function startApp(root: HTMLElement): void {
     if (mode === "world" && talkEl.hidden && veil.hidden) openRest();
   });
 
+  /** 左上角任务木牌，顺便把地图箭头指到任务地点。 */
+  let plaqueKey = "";
+  const questPlaque = (): void => {
+    const p = plaque(game);
+    world.marker = p?.at ? spotXZ(p.at, game.player) : null;
+    const html = plaqueHTML(p);
+    if (html === plaqueKey) return;
+    const el = $("#h-quest");
+    if (plaqueKey) {
+      el.classList.remove("done");
+      void el.offsetWidth;
+      el.classList.add("done");
+    }
+    plaqueKey = html;
+    el.innerHTML = html;
+  };
+
   /** 底部工具栏：套索、名望、马厩里的马、马厩和菜单。 */
   const TOOLBAR_HORSES = 6;
   let toolbarKey = "";
   const toolbar = (): void => {
     const horses = game.horses.slice(0, TOOLBAR_HORSES);
-    const key = JSON.stringify([game.lassos, game.reputation, horses.map((h) => [h.id, h.name, game.selectedId === h.id])]);
+    const key = JSON.stringify([game.lassos, game.reputation, game.story.diary.length, game.story.history.length, horses.map((h) => [h.id, h.name, encodeHorseCode(h), game.selectedId === h.id])]);
     if (key === toolbarKey) return;
     toolbarKey = key;
     const tb = $("#toolbar");
@@ -330,6 +405,8 @@ export function startApp(root: HTMLElement): void {
       }).join("")}
       <i class="tsep"></i>
       <button class="tslot" id="b-stable" title="马厩（Tab）">${ico("horse")}</button>
+      <button class="tslot" id="b-story" title="剧情回看">${ico("scroll")}</button>
+      ${game.story.diary.length ? `<button class="tslot" id="b-diary" title="外婆的日记">${ico("scroll")}<b class="stack">${game.story.diary.length}</b></button>` : ""}
       <button class="tslot" id="b-menu" title="菜单（Esc）">${ico("menu")}</button>`;
     drawPortraits(tb);
   };
@@ -345,7 +422,8 @@ export function startApp(root: HTMLElement): void {
   const drawPortraits = (scope: ParentNode): void => {
     scope.querySelectorAll<HTMLCanvasElement>("canvas[data-pt]").forEach((c) => {
       const g = portraitOf(c.dataset.pt as string);
-      if (g) drawPortrait(c, g, "noon", c.dataset.bust !== undefined);
+      const h = findHorse(game, c.dataset.pt as string) ?? game.rivals.find(h => h.id === c.dataset.pt);
+      if (g) drawPortrait(c, g, "noon", c.dataset.bust !== undefined, h ? hasWings(h) : false);
     });
   };
 
@@ -374,6 +452,7 @@ export function startApp(root: HTMLElement): void {
     if (talkEl.hidden && mode === "world") world.paused = false;
     cb?.();
     hud();
+    flushStory();
   };
 
   panelEl.addEventListener("click", (e) => {
@@ -387,36 +466,70 @@ export function startApp(root: HTMLElement): void {
 
   /* ---------------- 对白 ---------------- */
 
-  let talkLines: string[] = [];
+  let talkLines: Line[] = [];
   let talkIndex = 0;
   let talkThen: (() => void) | null = null;
   let talkOpened = 0;
+  let talkPersistent = false;
 
-  const talk = (name: string, lines: string[], then?: () => void): void => {
+  /** 演一段对白，每句可以换人说；演完调用 then。 */
+  const play = (lines: Line[], then?: () => void, persistent = false): void => {
+    if (!lines.length) return then?.();
     talkLines = lines;
     talkIndex = 0;
     talkThen = then ?? null;
+    talkPersistent = persistent;
     talkOpened = performance.now();
     talkEl.hidden = false;
     world.paused = true;
-    talkEl.dataset.name = name;
     renderTalk();
   };
   const renderTalk = (): void => {
-    const name = talkEl.dataset.name ?? "";
-    const who = PORTRAIT[name];
-    talkEl.innerHTML = `<div class="t-text"><p>${esc(talkLines[talkIndex] ?? "")}</p><span class="t-more"></span></div>
-      ${who ? `<div class="t-face"><span class="t-pic"><img src="${portraitURL(who)}" alt="" /></span><span class="t-name">${esc(name)}</span></div>` : ""}`;
+    const line = talkLines[talkIndex] ?? { who: "", text: "" };
+    storyStage.show(line, game);
+    const pic = line.who ? faceOf(line.who) : null;
+    const paper = line.who === DIARY_WHO || line.who === IOU_WHO;
+    const label = line.who && !pic && line.who !== YOU ? `<span class="t-who">${esc(line.who)}</span>` : "";
+    const text = line.who === YOU ? `${YOU}：${line.text}` : line.text;
+    talkEl.innerHTML = `<div class="t-text${paper ? " paper" : ""}"><p>${label}${esc(text)}</p><span class="t-more"></span></div>
+      ${pic ? `<div class="t-face"><span class="t-pic"><img src="${pic}" alt="" /></span><span class="t-name">${esc(line.who)}</span></div>` : ""}`;
   };
   const advanceTalk = (): void => {
     if (performance.now() - talkOpened < 200) return;
+    if (talkPersistent) {
+      game.story.pending.shift();
+      persist();
+    }
     talkIndex++;
     if (talkIndex < talkLines.length) return renderTalk();
     talkEl.hidden = true;
+    storyStage.hide();
     if (veil.hidden && mode === "world") world.paused = false;
     const then = talkThen;
     talkThen = null;
     then?.();
+    flushStory();
+  };
+
+  /* ---------------- 剧情 ---------------- */
+
+  /** 等着演的剧情对白：面板开着、比赛进行中时先攒着，回到大世界再演。 */
+  const free = (): boolean => mode === "world" && veil.hidden && talkEl.hidden;
+  const flushStory = (): void => {
+    if (!game.story.pending.length || !free()) return;
+    const lines = game.story.pending.slice();
+    play(lines, () => {
+      persist();
+      hud();
+    }, true);
+  };
+  /** 报一件玩家做的事给剧本；有对白就排上，空下来就演。 */
+  const story = (e: StoryEvent): void => {
+    const res = storyEvent(game, e);
+    persist();
+    hud();
+    if (!res.lines.length) return;
+    flushStory();
   };
   talkEl.addEventListener("click", advanceTalk);
 
@@ -445,10 +558,12 @@ export function startApp(root: HTMLElement): void {
   const horseTags = (h: StableHorse): string => {
     const tags: string[] = [];
     if (isFoal(h, game.day)) tags.push(`<span class="tag">小马</span>`);
-    if (game.entry?.day === game.day && game.entry.horseId === h.id) tags.push(`<span class="tag red">出赛</span>`);
+    if (game.entry?.day === game.day && (game.entry.horseId === h.id || game.entry.team?.includes(h.id))) tags.push(`<span class="tag red">出赛</span>`);
+    if (hasWings(h)) tags.push(`<span class="tag gold">羽翼</span>`);
+    else if (h.sequenced && h.wingGenes.includes(1)) tags.push(`<span class="tag">携带羽翼材料</span>`);
     if (game.pregnancies.some((p) => p.damId === h.id || p.sireId === h.id)) tags.push(`<span class="tag pink">配种</span>`);
     if (h.sequencing) tags.push(`<span class="tag">测序中</span>`);
-    if (h.mutations.length) tags.push(`<span class="tag gold">突变</span>`);
+    if (h.mutations.length && genesUnlocked(game)) tags.push(`<span class="tag gold">突变</span>`);
     return tags.join("");
   };
 
@@ -461,7 +576,9 @@ export function startApp(root: HTMLElement): void {
     </button>`;
 
   const statBars = (h: StableHorse): string => {
-    const s = displayStats(express(h.genome));
+    const p = express(h.genome);
+    const s = displayStats(p);
+    if (hasWings(h)) s.endurance = Math.max(0, Math.round(s.endurance - 0.6 * (metabolicBudget(p, 18).over - metabolicBudget(p).over)));
     const row = (glyph: string, label: string, v: number, hint: string): string => `
       <div class="stat" title="${label} ${v}　${hint}">
         <span class="s-glyph">${glyph}</span>
@@ -476,8 +593,16 @@ export function startApp(root: HTMLElement): void {
     </div>`;
   };
 
+  /** 基因栏：拿到第一份测序结果以前整块不显示；第一次出现时带个「新」字。 */
   const geneGrid = (h: StableHorse): string => {
+    if (!genesUnlocked(game)) return "";
+    const fresh = !game.flags["genes:seen"] ? `<div class="genes-new"><span class="tag red">新</span><span>基因</span></div>` : "";
+    return fresh + geneCells(h);
+  };
+
+  const geneCells = (h: StableHorse): string => {
     const p = express(h.genome);
+    const budget = metabolicBudget(p, hasWings(h) ? 18 : 0);
     const mutated = new Set(h.mutations);
     return `<div class="genes${h.sequenced ? "" : " locked"}" title="${h.sequenced ? "" : "去镇上测序才能看到基因"}">
       ${LOCUS_IDS.map((id) => {
@@ -489,7 +614,7 @@ export function startApp(root: HTMLElement): void {
           <span class="g-track"><i style="left:${((p[id] + 2) / 4) * 100}%"></i></span>
         </span>`;
       }).join("")}
-    </div>`;
+    </div>${h.sequenced ? `<p class="hint-line" title="体型、肌力、步频和可用羽翼消耗代谢预算，超出会削弱体力">代谢 ${budget.used}/${budget.cap}${budget.over ? `　超出 ${budget.over}` : ""}</p>` : ""}`;
   };
 
   /* ---------------- 马厩和马的详情 ---------------- */
@@ -510,8 +635,8 @@ export function startApp(root: HTMLElement): void {
     if (!h) return;
     game.selectedId = id;
     const p = express(h.genome);
-    const plan = bodyPlanFrom(p);
-    const code = encodeGenome(h.genome);
+    const plan = bodyPlanFrom(p, hasWings(h));
+    const code = encodeHorseCode(h);
     const pub = h.pub;
     panel(
       "",
@@ -542,12 +667,27 @@ export function startApp(root: HTMLElement): void {
       },
       { cls: "detail" },
     );
+    if (h.sequenced) game.flags["genes:seen"] = true;
+    story({ t: "detail", horseId: id });
   };
 
   /* ---------------- 地点 ---------------- */
 
   const interact = (id: InteractId): void => {
     if (mode !== "world" || !veil.hidden || !talkEl.hidden) return;
+    // 信先拆开看，剧情的对白等信合上再演；其他地方先演对白再开面板。
+    if (id === "mail") {
+      openMail();
+      return story({ t: "interact", id });
+    }
+    const res = storyEvent(game, { t: "interact", id });
+    persist();
+    hud();
+    if (id === "laozhao") return play(res.lines.length ? res.lines : idleLines(game, "老赵"), () => openZhao(), !!res.lines.length);
+    play(res.lines, () => openPlace(id), true);
+  };
+
+  const openPlace = (id: InteractId): void => {
     switch (id) {
       case "sleep":
         return askSleep();
@@ -565,9 +705,138 @@ export function startApp(root: HTMLElement): void {
         return openRegister("sumo");
       case "race":
         return openRegister("race");
-      case "laozhao":
-        return talk("老赵", laozhaoLines(game), persist);
+      case "circus":
+        return openCircus();
+      case "wetland": case "hill": case "coast": case "forest": case "mountain":
+        return openTerrain(id);
+      default:
+        return;
     }
+  };
+
+  const workButton = (id: WorkId): string => game.flags[`work:${id}`] || game.day<WORK[id].day ? "" : `<button class="btn wood" data-act="work" data-arg="${id}">${WORK[id].label} ${money(WORK[id].pay)} ${cost(WORK[id].minutes)}</button>`;
+  const finishWork = (id: string): void => {
+    const result=doWork(game,id as WorkId);
+    if(!result.ok)return toast(result.reason);
+    persist();story({t:"work",id});closePanel();
+  };
+  const openZhao = (): void => panel("老赵",`<div class="row center">${workButton("ring")}<button class="btn" data-act="ring">去擂台</button></div>`,{work:finishWork,ring:()=>openRegister("sumo")},{cls:"narrow"});
+  const openJournal = (): void => panel("一路走来",`<div class="story-log">${game.story.history.length?game.story.history.map(scene=>`<details><summary>${scene.id.startsWith("ending:")?"结局":`第${scene.day}天`}　${esc(scene.title)}</summary>${scene.lines.map(line=>`<p>${line.who?esc(line.who)+"：":""}${esc(line.text)}</p>`).join("")}</details>`).join(""):`<p class="say">读过的故事会留在这里。</p>`}</div>`,{}, {cls:"wide"});
+  let activityPick: string|null=null;
+  let program: Program="haul";
+  const adults = (): StableHorse[] => game.horses.filter(h=>!isFoal(h,game.day));
+  const selectedAdult = (): StableHorse|undefined => {
+    const ready=adults();
+    if(!ready.some(h=>h.id===activityPick))activityPick=ready[0]?.id??null;
+    return ready.find(h=>h.id===activityPick);
+  };
+  const openCircus = (): void => {
+    if(game.day<8)return panel("红帐篷",`<p class="say">马戏团还在路上。</p>`,{}, {cls:"narrow"});
+    selectedAdult();
+    panel("米娅的马戏团",`
+      <div class="row center">${(Object.keys(PROGRAMS) as Program[]).map(p=>`<button class="btn ${p===program?"":"wood"}" data-act="program" data-arg="${p}">${PROGRAMS[p]}</button>`).join("")}</div>
+      <div class="roster compact">${adults().map(h=>card(h,{act:"pick",on:h.id===activityPick})).join("")}</div>
+      <div class="row center"><button class="btn big" data-act="show" ${activityPick?"":"disabled"}>上台 ${cost(TIME_COST.circus)}</button>${workButton("tent")}</div>
+      <p class="hint-line">今天最多两场。换一匹马，或换一个项目。</p>`,{
+        pick:id=>{activityPick=id;openCircus();},program:id=>{program=id as Program;openCircus();},work:finishWork,
+        show:()=>{const result=startPerformance(game,activityPick!,program);if(!result.ok)return toast(result.reason);persist();closePanel();runPerformance(result.race!);},
+      },{cls:"wide"});
+  };
+  const runPerformance = (race: Race): void => {
+    const showProgram=game.performance!.program;
+    enterEventView(raceCanvas);stage.active=true;stage.time="noon";
+    stage.show(race,{mode:"circus",player:0,program:showProgram,title:PROGRAMS[showProgram],onFinish:done=>{
+      const report=completePerformance(game,done);
+      if(!report)return;
+      persist();story({t:"circus",success:report.success});
+      panel(PROGRAMS[showProgram],`<div class="trial-res"><span class="stamp-big">${report.success?"完成":"接住了"}</span><p>${money(report.pay)}</p><p>${parts(report.result.falls>0&&"摔倒",report.result.stalls>0&&"掌声前停顿",report.result.distance.toFixed(1)+"米")}</p></div><div class="row center"><button class="btn" data-act="close">回后台</button></div>`,{}, {cls:"narrow",onClose:()=>leaveEventView("circus")});
+    }});
+  };
+  const openTerrain = (terrain: Exclude<Terrain,"grass">): void => {
+    const day={wetland:12,hill:12,coast:15,forest:16,mountain:23}[terrain];
+    if(game.day<day)return panel(TERRAIN_LABELS[terrain],`<p class="say">第${day}天再来看看。</p>`,{}, {cls:"narrow"});
+    selectedAdult();
+    panel(TERRAIN_LABELS[terrain],`<div class="roster compact">${adults().map(h=>card(h,{act:"pick",on:h.id===activityPick})).join("")}</div>
+      <div class="row center"><button class="btn big" data-act="trial" ${activityPick?"":"disabled"}>试试这段路 ${cost(TIME_COST.trial)}</button>
+      ${terrain==="forest"?`<button class="btn wood" data-act="practice">接力演练 ${cost(TIME_COST.relay)}</button>`:""}${terrain==="coast"?workButton("levee"):""}
+      ${terrain==="mountain"&&!game.flags["mountain:sample"]?`<button class="btn wood" data-act="feather">拾羽毛 ${cost(TIME_COST.sample)}</button><button class="btn wood" data-act="catch">尝试套马 ${cost(TIME_COST.throwLasso+TIME_COST.catch)}</button>`:""}</div>`,{
+        pick:id=>{activityPick=id;openTerrain(terrain);},work:finishWork,
+        trial:()=>{const h=selectedAdult();if(!h)return;const r=startTrial(game,h.id);if(!r.ok)return toast(r.reason);persist();closePanel();runTrial(h,terrain);},
+        practice:()=>{const r=practiceRelay(game);if(!r.ok)return toast(r.reason);persist();closePanel();runRelay(false);},
+        feather:()=>takeMountainSample(false),catch:()=>takeMountainSample(true),
+      },{cls:"wide"});
+  };
+  const takeMountainSample = (catchHorse:boolean):void=>{
+    const result=mountainSample(game,catchHorse);
+    if(!result.ok)return toast(result.reason);
+    persist();world.sync();
+    if(catchHorse&&!result.caught){toast("套索落空了。还可以拾一根羽毛。");return openTerrain("mountain");}
+    story({t:"sample",caught:!!result.caught});closePanel();
+  };
+  let editLocus:LocusId="power";
+  let editChain:0|1=0;
+  const openEditor = ():void=>{
+    if(game.day<18)return;
+    const horses=adults().filter(h=>h.sequenced);
+    if(!horses.some(h=>h.id===activityPick))activityPick=horses[0]?.id??null;
+    const horse=horses.find(h=>h.id===activityPick);
+    const allele=horse?.genome[editLocus][editChain];
+    panel("改一处",`<div class="roster compact">${horses.map(h=>card(h,{act:"pick",on:h.id===activityPick})).join("")}</div>
+      <div class="row center"><select id="edit-locus" class="activity-select" aria-label="编辑位点">${LOCUS_IDS.map(l=>`<option value="${l}" ${l===editLocus?"selected":""}>${LOCI[l].name}</option>`).join("")}</select>
+      <button class="btn wood" data-act="chain">第${editChain+1}条链</button><b>${allele??"?"}</b></div>
+      <div class="row center"><button class="btn" data-act="edit" data-arg="-1" ${horse?"":"disabled"}>减一格</button><button class="btn" data-act="edit" data-arg="1" ${horse?"":"disabled"}>加一格</button></div>
+      <p class="hint-line">${game.flags["edit:coupon-used"]?money(1500):"第一次名额"} ${cost(TIME_COST.edit)}</p>
+      <div class="row center"><button class="btn wood" data-act="no">先不改</button></div>`,{
+        pick:id=>{activityPick=id;openEditor();},chain:()=>{editChain=editChain===0?1:0;openEditor();},
+        edit:delta=>{const result=editGene(game,activityPick!,editLocus,editChain,Number(delta) as -1|1);if(!result.ok)return toast(result.reason);persist();world.sync();story({t:"edit"});openEditor();},
+        no:()=>{story({t:"choice",id:"edit",value:"no"});closePanel();},
+      },{cls:"wide"});
+    panelEl.querySelector<HTMLSelectElement>("#edit-locus")?.addEventListener("change",e=>{editLocus=(e.target as HTMLSelectElement).value as LocusId;openEditor();});
+  };
+  const relayPick:string[]=[];
+  const openRelayRegister=():void=>{
+    const ready=adults();
+    for(let i=relayPick.length-1;i>=0;i--)if(!ready.some(h=>h.id===relayPick[i]))relayPick.splice(i,1);
+    panel("六地貌接力",`<div class="relay-slots">${RELAY_LEGS.map((leg,i)=>`<div class="slot"><small>${TERRAIN_LABELS[leg[0]]} → ${TERRAIN_LABELS[leg[1]]}</small><b>${esc(findHorse(game,relayPick[i]??"")?.name??"选一匹")}</b></div>`).join("")}</div>
+      <div class="roster compact">${ready.map(h=>card(h,{act:"pick",on:relayPick.includes(h.id)})).join("")}</div>
+      <div class="row center">${game.flags[`ev:${game.day}`]?`<span class="stamp-s">今日报名结束</span>`:game.entry?`<span class="stamp-s">已报名</span><button class="btn" data-act="wait">等开赛</button>`:`<button class="btn big" data-act="enter" ${relayPick.length===3?"":"disabled"}>报名 ${money(ENTRY_FEE)} ${cost(TIME_COST.register)}</button>`}</div>`,{
+        pick:id=>{if(game.entry)return;const i=relayPick.indexOf(id);if(i>=0)relayPick.splice(i,1);else if(relayPick.length<3)relayPick.push(id);openRelayRegister();},
+        enter:()=>{const r=registerRelay(game,relayPick as [string,string,string]);if(!r.ok)return toast(r.reason);persist();story({t:"register"});openRelayRegister();},
+        wait:()=>waitTillEvent(),
+      },{cls:"wide"});
+  };
+  const runRelay=(formal:boolean):void=>{
+    const teams=formal?relayTeams(game):[{id:"practice",name:"演练队",horses:[0,1,2].map(i=>{
+      const h=adults()[i]??game.rivals.find(r=>r.id===(i===1?"r-doubao":"r-laohuang"))!;
+      return {id:h.id,name:h.name,genome:h.genome,wings:hasWings(h)};
+    }) as ReturnType<typeof relayTeams>[number]["horses"]}];
+    const totals=new Map(teams.map(t=>[t.id,{seconds:0,falls:0,stalls:0,flightTime:0}]));
+    enterEventView(raceCanvas);stage.active=true;stage.time="dusk";
+    const leg=(i:number):void=>{
+      const race=relayRace(teams,i,hashSeed(`relay:${game.day}`));
+      stage.show(race,{mode:"race",player:formal?teams.findIndex(t=>t.id===game.entry?.horseId):0,title:`第${i+1}棒　${RELAY_LEGS[i]!.map(t=>TERRAIN_LABELS[t]).join(" → ")}`,onFinish:done=>{
+        for(const r of done.results()){const total=totals.get(r.id)!;total.seconds+=relaySeconds(r);total.falls+=r.falls;total.stalls+=r.stalls;total.flightTime+=r.flightTime;}
+        if(i<2)return leg(i+1);
+        if(!formal){persist();story({t:"practice"});return panel("接力演练",`<p class="say">三段路跑完了。试试换一下分工。</p><div class="row center"><button class="btn" data-act="close">回林谷</button></div>`,{}, {cls:"narrow",onClose:()=>leaveEventView("forest")});}
+        const rows=teams.map(t=>({id:t.id,name:t.name,rank:0,time:totals.get(t.id)!.seconds,distance:240,falls:totals.get(t.id)!.falls,stalls:totals.get(t.id)!.stalls,stumbles:0,flightTime:totals.get(t.id)!.flightTime})).sort((a,b)=>a.time-b.time);
+        rows.forEach((r,n)=>r.rank=n+1);
+        const out=applyOutcome(game,"relay",rows.map(r=>r.id));persist();story({t:"outcome",kind:"relay",rank:out.myRank});showResults(out,rows);
+      }});
+    };
+    leg(0);
+  };
+
+  /* 信箱 */
+  const openMail = (): void => {
+    const mails = readMail(game);
+    persist();
+    if (!mails.length) return toast("信箱是空的");
+    panel("", mails.map(mailHTML).join(""), {}, { cls: "letter-scroll" });
+  };
+
+  /* 外婆的日记 */
+  const openDiary = (): void => {
+    panel("外婆的日记", diaryHTML(game.story.diary, DIARY), {}, { cls: "wide" });
   };
 
   /* 配种 */
@@ -590,12 +859,20 @@ export function startApp(root: HTMLElement): void {
         ${slot(0)}<span class="heart">♥</span>${slot(1)}
       </div>
       <div class="row center"><button class="btn big" data-act="mate" ${breedPick.length < 2 || full ? "disabled" : ""}>配种 ${cost(TIME_COST.mate)}</button></div>
+      ${game.day>=25?`<div class="row center"><button class="btn wood" data-act="chimera" ${breedPick.length<2||full?"disabled":""}>背部嵌合 ${cost(TIME_COST.mate+TIME_COST.chimera)}</button></div>`:""}
+      ${[3,25].includes(game.day)?`<div class="row center"><button class="btn wood" data-act="wait-breed">再等等</button></div>`:""}
       ${full ? `<p class="warn-line">马厩满了</p>` : ""}
       <div class="roster compact">${game.horses
         .filter((h) => !breedPick.includes(h.id))
         .map((h) => card(h, { act: "pick", off: !usable(h) }))
         .join("")}</div>`,
       {
+        "wait-breed": () => { story({t:"choice",id:"breed",value:"wait"});closePanel(); },
+        chimera: () => {
+          const res=prepareChimera(game,breedPick[0]!,breedPick[1]!);
+          if(!res.ok)return toast(res.reason);
+          breedPick.length=0;persist();world.sync();openBarn();story({t:"chimera"});
+        },
         pick: (id) => {
           if (breedPick.length >= 2) breedPick.shift();
           breedPick.push(id);
@@ -613,6 +890,7 @@ export function startApp(root: HTMLElement): void {
           persist();
           toast("配上了，明早出生");
           openBarn();
+          story({ t: "mate" });
         },
       },
       { cls: "wide" },
@@ -621,9 +899,14 @@ export function startApp(root: HTMLElement): void {
 
   /* 测序 */
   const openSequencing = (): void => {
+    if (!sequencingOpen(game)) {
+      panel("测序所", `<div class="closed-sign"><span class="stamp-big">暂停营业</span><p class="say">博士出门</p></div>`, {}, { cls: "narrow" });
+      return;
+    }
+    const fee = sequencingFee(game);
     panel(
       "测序",
-      `<div class="price-head">${money(SEQUENCING_FEE)}<small>一匹</small>${cost(TIME_COST.sequence)}<small>明早出结果</small></div>
+      `<div class="price-head">${money(fee)}<small>一匹</small>${cost(TIME_COST.sequence)}<small>明早出结果</small>${fee < SEQUENCING_FEE ? `<span class="tag red">首测半价</span>` : ""}</div>
        <div class="roster">${game.horses
          .map((h) =>
            card(h, {
@@ -631,8 +914,11 @@ export function startApp(root: HTMLElement): void {
              badge: h.sequenced ? `<span class="stamp-s">已测</span>` : h.sequencing ? `<span class="stamp-s grey">明早</span>` : "",
            }),
          )
-         .join("")}</div>`,
+         .join("")}</div>
+       <div class="row center">${game.day>=18?`<button class="btn wood" data-act="editor">基因剪刀</button>`:""}<button class="btn wood" data-act="wait-sequence">以后再测</button></div>`,
       {
+        editor:()=>openEditor(),
+        "wait-sequence":()=>{story({t:"choice",id:"sequence",value:"wait"});closePanel();},
         detail: (id) => openDetail(id, openSequencing),
         seq: (id) => {
           const res = sendToSequencing(game, id);
@@ -640,6 +926,7 @@ export function startApp(root: HTMLElement): void {
           persist();
           toast("收下了，明早出结果");
           openSequencing();
+          story({ t: "sequence" });
         },
       },
       { cls: "wide" },
@@ -674,6 +961,7 @@ export function startApp(root: HTMLElement): void {
           world.sync();
           toast(`${name}卖掉了`);
           openMarket();
+          story({ t: "sell" });
         },
       },
       { cls: "wide", onClose: () => (selling = null) },
@@ -708,16 +996,17 @@ export function startApp(root: HTMLElement): void {
   /* 报名（赛马场门口或相扑台） */
   let regPick: string | null = null;
   const openRegister = (venue: "race" | "sumo"): void => {
+    if(eventFor(game.day)==="relay"&&venue==="race")return openRelayRegister();
     const kind = eventFor(game.day);
-    const today = kind === "race" ? "race" : "sumo";
+    const today = sportOf(game.day);
     const done = !!game.flags[`ev:${game.day}`];
-    if (venue === "sumo" && today !== "sumo") return toast(`今天是${EVENT_LABELS[kind]}，相扑在双日`);
+    if (venue === "sumo" && today !== "sumo") return toast(`今天是${EVENT_LABELS[kind]}，在赛马场`);
     const canEnter = today === venue && !done && game.clock < EVENT_TIME;
     const entered = game.entry?.day === game.day ? findHorse(game, game.entry.horseId) : undefined;
     const ready = game.horses.filter((h) => !isFoal(h, game.day));
     if (!regPick || !ready.some((h) => h.id === regPick)) regPick = ready[0]?.id ?? null;
     const rivals = todaysField(game).filter((f) => !f.mine);
-    const title = venue === "race" ? (today === "race" ? EVENT_LABELS.race : "赛马场") : EVENT_LABELS[kind];
+    const title = venue === today ? EVENT_LABELS[kind] : "赛马场";
     const rivalRow =
       today === venue && !done
         ? `<div class="rivals">${rivals
@@ -741,8 +1030,12 @@ export function startApp(root: HTMLElement): void {
          ${venue === "race" ? `<button class="btn wood big" data-act="trial" ${regPick ? "" : "disabled"} title="单独跑 ${TRIAL_SECONDS} 秒，看看能跑多远">试跑 ${cost(TIME_COST.trial)}</button>` : ""}
          ${canEnter && !entered ? `<button class="btn big" data-act="enter" ${regPick ? "" : "disabled"}>报名 ${money(ENTRY_FEE)} ${cost(TIME_COST.register)}</button>` : ""}
          ${entered && today === venue && eventPending(game) ? `<button class="btn big" data-act="wait">等开赛 ${cost(EVENT_TIME - game.clock)}</button>` : ""}
-       </div>`,
+       </div>
+       <div class="row center">${workButton("fence")}${game.day===27?`<button class="btn wood" data-act="help-wanbi">帮它看场边</button><button class="btn wood" data-act="watch-wanbi">记录这次试跑</button>`:""}</div>`,
       {
+        work:finishWork,
+        "help-wanbi":()=>{story({t:"choice",id:"wanbi",value:"help"});closePanel();},
+        "watch-wanbi":()=>{story({t:"choice",id:"wanbi",value:"watch"});closePanel();},
         pick: (id) => {
           regPick = id;
           openRegister(venue);
@@ -754,6 +1047,7 @@ export function startApp(root: HTMLElement): void {
           persist();
           toast("报上名了，傍晚五点开赛");
           openRegister(venue);
+          story({ t: "register" });
         },
         wait: () => waitTillEvent(),
         trial: () => {
@@ -812,8 +1106,9 @@ export function startApp(root: HTMLElement): void {
         </div>`;
     panel(
       `${EVENT_LABELS[eventFor(game.day)]}赔率`,
-      `${board}${ticket}`,
+      `${board}${ticket}<div class="row center"><button class="btn wood" data-act="no-bet">留着草料钱</button></div>`,
       {
+        "no-bet":()=>{story({t:"choice",id:"bet",value:"no"});closePanel();},
         pick: (id) => {
           betPick = id;
           openBookie();
@@ -833,6 +1128,7 @@ export function startApp(root: HTMLElement): void {
           if (!res.ok) return toast(res.reason);
           persist();
           openBookie();
+          story({ t: "bet" });
         },
       },
       { cls: "wide" },
@@ -858,6 +1154,7 @@ export function startApp(root: HTMLElement): void {
   /* ---------------- 睡觉和夜晚结算 ---------------- */
 
   const askSleep = (): void => {
+    if (offerPending(game)) return offer();
     const pending = eventPending(game) && (game.entry?.day === game.day || game.bet?.day === game.day);
     if (!pending) return goToSleep();
     panel(
@@ -866,6 +1163,34 @@ export function startApp(root: HTMLElement): void {
        <div class="row center"><button class="btn wood big" data-act="wait">等开赛 ${cost(EVENT_TIME - game.clock)}</button><button class="btn big" data-act="sleep">睡</button></div>`,
       { sleep: () => goToSleep(), wait: () => waitTillEvent() },
       { cls: "narrow" },
+    );
+  };
+
+  /** 第30天，确认收购或拒绝后再结算当晚。 */
+  const offer = (): void => {
+    play(offerPrelude(game), () =>
+      panel(
+        "",
+        `<div class="letter mail"><h3 class="mail-title">牧场转让书</h3><p>天马牧场作价三万，转让给马氏庄园。欠款一笔勾销。</p></div>
+         <div class="row center"><button class="btn wood big" data-act="sign">签字</button><button class="btn big" data-act="refuse">不签</button></div>`,
+        {
+          sign: () => {
+            onPanelClose = null;
+            closePanel();
+            const lines = answerOffer(game, true);
+            persist();
+            play(lines, () => showEnding("mascot"), true);
+          },
+          refuse: () => {
+            onPanelClose = null;
+            closePanel();
+            const lines = answerOffer(game, false);
+            persist();
+            play(lines, () => goToSleep(), true);
+          },
+        },
+        { cls: "narrow", closable: false },
+      ),
     );
   };
 
@@ -879,18 +1204,28 @@ export function startApp(root: HTMLElement): void {
   };
 
   const goToSleep = (forced = false): void => {
+    if (offerPending(game)) return offer();
     closePanel();
     world.paused = true;
-    fade(() => {
-      const report = sleep(game);
-      world.setState(game);
-      persist();
-      hud();
-      showNight(report, forced);
-    });
+    const res = storyEvent(game, { t: "sleep" });
+    play(res.lines, () =>
+      fade(() => {
+        const report = sleep(game);
+        world.setState(game);
+        persist();
+        hud();
+        const extra = nightReward(game, report);
+        const lines = nightLines(report);
+        for (const page of extra) lines.push({ who: DIARY_WHO, text: DIARY[page] as string });
+        persist();
+        play(lines, () => showNight(report, forced), true);
+      }),
+      true,
+    );
   };
 
   const showNight = (r: NightReport, forced: boolean): void => {
+    if (r.ruined) return showEnding("mascot");
     const total = r.ledger.reduce((a, l) => a + l.amount, 0);
     const lines = r.ledger
       .map((l) => `<li><span>${esc(l.label)}</span><b class="${l.amount >= 0 ? "plus" : "minus"}">${l.amount >= 0 ? "+" : "−"}${Math.abs(l.amount)}</b></li>`)
@@ -900,48 +1235,54 @@ export function startApp(root: HTMLElement): void {
       : "";
     const seq = r.sequenced.length ? `<div class="news"><span class="news-tag">测序</span>${r.sequenced.map((h) => `<span class="tag">${esc(h.name)}</span>`).join("")}</div>` : "";
     const grown = r.grownUp.length ? `<div class="news"><span class="news-tag">长大</span>${r.grownUp.map((h) => `<span class="tag">${esc(h.name)}</span>`).join("")}</div>` : "";
-    if (r.ruined) return showRuined(r);
+    const nextDue = r.ending ? 0 : debtDue(game.day);
     panel(
       `第${cn(r.day)}天`,
       `${forced ? `<p class="say">累倒在路边，被人抬回了家。</p>` : ""}
        <ul class="ledger">${lines || `<li class="empty"><span>没进没出</span></li>`}</ul>
        <div class="ledger-total"><span>今天</span><b class="${total >= 0 ? "plus" : "minus"}">${total >= 0 ? "+" : "−"}${Math.abs(total)}</b><span class="purse-now">${money(game.money)}</span></div>
-       ${r.debtPaid ? `<div class="debt-paid"><span class="stamp-big">还清</span><span>${money(r.debtPaid)}</span>${debtDue(game.day) ? `<small>下一笔 ¥${debtDue(game.day).toLocaleString("zh-CN")}</small>` : ""}</div>` : ""}
+       ${r.debtPaid ? `<div class="debt-paid"><span class="stamp-big">还清</span><span>${money(r.debtPaid)}</span>${nextDue ? `<small>下一笔 ¥${nextDue.toLocaleString("zh-CN")}</small>` : ""}</div>` : ""}
+       ${r.grace ? `<div class="debt-paid"><span class="stamp-big">宽限</span><span>${money(r.grace.amount)}</span><small>${r.grace.dueDay - r.day}天</small></div>` : ""}
        ${foals}${seq}${grown}
        <div class="row center"><button class="btn big" data-act="close">天亮了</button></div>`,
       { none: () => undefined },
-      { cls: "night", closable: true, onClose: morning },
+      { cls: "night", closable: true, onClose: () => (r.ending ? showEnding(r.ending) : morning()) },
     );
   };
 
   const morning = (): void => {
     hud();
-    persist();
-    if (eventFor(game.day) === "boss" && !game.flags[`boss-hint:${game.day}`]) {
-      game.flags[`boss-hint:${game.day}`] = true;
-      toast("今天老赵摆擂台");
-    }
+    story({ t: "morning" });
+    if (game.story.inbox.length) toast("信箱里有信");
   };
 
-  const showRuined = (r: NightReport): void => {
+  /** 结局画面。吉祥物结局只能从头再来；另外两个进无尽模式。 */
+  const showEnding = (ending: Ending): void => {
+    if (!game.flags["ending:read"]) {
+      queueEnding(game, ending);
+      persist();
+      return play(game.story.pending.slice(), () => {
+        game.flags["ending:read"] = true;
+        persist();
+        showEnding(ending);
+      }, true);
+    }
+    const over = ending === "mascot";
     panel(
       "",
-      `<div class="ruin">
-        <span class="stamp-big huge">查封</span>
-        <p class="say">第${r.day}天夜里，马董带人来收牧场。</p>
-        <p class="say">还差 ${money(Math.max(0, debtDue(r.day) - game.money))}</p>
-      </div>
-      <div class="row center"><button class="btn big" data-act="restart">从头再来</button></div>`,
+      `${endingHTML(ending, game)}
+       <div class="row center">${over ? `<button class="btn big" data-act="restart">从头再来</button>` : `<button class="btn big" data-act="close">接着养马</button>`}</div>`,
       {
         restart: () => {
           game = resetGame();
           world.setState(game);
+          onPanelClose = null;
           closePanel();
           hud();
           intro();
         },
       },
-      { cls: "narrow", closable: false },
+      { cls: "narrow", closable: !over, onClose: over ? undefined : morning },
     );
   };
 
@@ -989,9 +1330,9 @@ export function startApp(root: HTMLElement): void {
   };
 
   /** 试跑：时间在点「试跑」的时候已经花掉了。 */
-  const runTrial = (h: StableHorse): void => {
+  const runTrial = (h: StableHorse, terrain: Terrain = "grass"): void => {
     const seed = hashSeed(`trial:${h.id}:${h.record.trials}`);
-    const race = new Race([{ id: h.id, name: h.name, genome: h.genome }], { distance: 10_000, seed, timeLimit: TRIAL_SECONDS });
+    const race = new Race([{ id: h.id, name: h.name, genome: h.genome, wings:hasWings(h) }], { distance: terrain === "grass" ? 10_000 : 40, seed, timeLimit: TRIAL_SECONDS, terrains: terrain==="grass"?undefined:[terrain] });
     enterEventView(raceCanvas);
     stage.time = game.clock < 10 * 60 ? "dawn" : game.clock < 16 * 60 ? "noon" : game.clock < 19 * 60 ? "dusk" : "night";
     stage.active = true;
@@ -1003,15 +1344,17 @@ export function startApp(root: HTMLElement): void {
         const prev = h.record.bestTrial;
         h.record.trials++;
         h.record.falls += res.falls;
-        h.record.bestTrial = Math.max(prev, res.distance);
+        if (terrain === "grass") h.record.bestTrial = Math.max(prev, res.distance);
         persist();
+        if(terrain!=="grass")story({t:"terrain",id:terrain});
+        story({ t: "trial", horseId: h.id, flew:res.flightTime>0.1 });
         panel(
           "",
           `<div class="trial-res">
             <h3 class="title-txt">${esc(h.name)}</h3>
             <div class="big-num">${res.distance.toFixed(1)}<small>米</small></div>
             <p>${parts(`${((res.distance / TRIAL_SECONDS) * 3.6).toFixed(0)}公里/时`, res.falls > 0 && `<span class="tag red">摔倒</span>`, res.stalls > 0 && `<span class="tag">发呆</span>`)}</p>
-            ${res.distance > prev && prev > 0 ? `<span class="stamp-big">新纪录</span>` : ""}
+            ${terrain === "grass" && res.distance > prev && prev > 0 ? `<span class="stamp-big">新纪录</span>` : ""}
           </div>
           <div class="row center"><button class="btn wood big" data-act="again">再跑 ${cost(TIME_COST.trial)}</button><button class="btn big" data-act="close">离开</button></div>`,
           {
@@ -1021,7 +1364,7 @@ export function startApp(root: HTMLElement): void {
               onPanelClose = null;
               closePanel();
               stage.clear();
-              runTrial(h);
+              runTrial(h, terrain);
             },
           },
           { cls: "narrow", onClose: () => leaveEventView(null) },
@@ -1050,12 +1393,25 @@ export function startApp(root: HTMLElement): void {
 
   const runEvent = (): void => {
     const kind = eventFor(game.day);
+    if(kind==="cup"&&!game.story.played["d31-start"]&&game.entry){
+      const scene=storyEvent(game,{t:"choice",id:"cup-start",value:"go"});persist();return play(scene.lines,runEvent,true);
+    }
+    if(kind==="relay")return runRelay(true);
     const field = todaysField(game);
     const seed = hashSeed(`event:${game.day}:${field.map((f) => f.id).join(",")}`);
-    if (kind === "race") {
+    const phys = WEATHER_PHYSICS[weatherFor(game.day)];
+    if (sportOf(game.day) === "race") {
       const race = new Race(
-        field.map((f) => ({ id: f.id, name: f.name, genome: f.genome })),
-        { distance: RACE_DISTANCE, seed, timeLimit: RACE_TIME_LIMIT },
+        field.map((f) => ({ id: f.id, name: f.name, genome: f.genome, wings:hasWings(findHorse(game,f.id)??f) })),
+        {
+          distance: RACE_DISTANCE,
+          seed,
+          timeLimit: RACE_TIME_LIMIT,
+          gravity: phys.gravity,
+          groundFriction: phys.friction,
+          wind: phys.wind,
+          crowd: kind === "cup" ? CUP_CROWD : undefined,
+        },
       );
       enterEventView(raceCanvas);
       stage.time = "dusk";
@@ -1068,13 +1424,14 @@ export function startApp(root: HTMLElement): void {
           const order = [...results].sort((a, b) => a.rank - b.rank).map((x) => x.id);
           const out = applyOutcome(game, kind, order);
           persist();
+          story({ t: "outcome", kind, rank: out.myRank, stalls:results.find(r=>r.id==="r-wanbi")?.stalls, flew:results.some(r=>findHorse(game,r.id)&&r.flightTime>0.1) });
           showResults(out, results);
         },
       });
     } else {
       const [a, b] = field;
       if (!a || !b) return;
-      const bout = new SumoBout({ id: a.id, name: a.name, genome: a.genome }, { id: b.id, name: b.name, genome: b.genome }, { seed });
+      const bout = new SumoBout({ id: a.id, name: a.name, genome: a.genome }, { id: b.id, name: b.name, genome: b.genome }, { seed, gravity: phys.gravity, groundFriction: phys.friction });
       enterEventView(sumoCanvas);
       sumoView.show(bout, {
         mine: a.mine ? 0 : null,
@@ -1082,6 +1439,7 @@ export function startApp(root: HTMLElement): void {
           const order = done.winner === null ? null : done.winner === 0 ? [a.id, b.id] : [b.id, a.id];
           const out = applyOutcome(game, kind, order);
           persist();
+          story({ t: "outcome", kind, rank: out.myRank });
           showResults(out, null, done);
         },
       });
@@ -1122,7 +1480,7 @@ export function startApp(root: HTMLElement): void {
         ? out.order
           ? `${esc(nameOf(out.order[0] as string))}赢了`
           : "平局"
-        : out.kind === "race"
+        : results
           ? out.myRank === 1
             ? "头名"
             : `第${cn(out.myRank)}名`
@@ -1146,9 +1504,8 @@ export function startApp(root: HTMLElement): void {
   };
 
   const afterEvent = (): void => {
-    const kind = eventFor(game.day);
     game.clock = Math.max(game.clock, AFTER_EVENT);
-    leaveEventView(VENUE[kind]);
+    leaveEventView(sportOf(game.day));
   };
 
   /* ---------------- 大地图 ---------------- */
@@ -1161,6 +1518,11 @@ export function startApp(root: HTMLElement): void {
     { text: "赵家擂台", x: 120, z: 46, big: true },
     { text: "牧场", x: 30, z: 87, big: true },
     { text: "野原", x: 98, z: 94, big: true },
+    { text: "红帐篷", x: 85, z: 31 },
+    ...(["wetland", "hill", "coast", "forest", "mountain"] as const).map(id => {
+      const place = INTERACTS.find(p => p.id === id)!;
+      return { text: place.label, x: place.x, z: place.z - 2 };
+    }),
     ...BUILDINGS.filter((b) => b.sign).map((b) => ({ text: b.sign as string, x: b.x + b.w / 2, z: b.z - 0.4 })),
     { text: "擂台", x: RING.x, z: RING.z - RING.r - 1.6 },
   ];
@@ -1259,25 +1621,17 @@ export function startApp(root: HTMLElement): void {
   /** 新手提示只在开场信之后说一句。 */
   const HOW_TO = "WASD 走动　E 互动　Tab 马厩　M 地图　点钟表歇脚";
 
+  /** 开场：城里的回忆，老赵的电话和接站，然后站在牧场门口。 */
   const intro = (): void => {
     if (game.flags.intro) return;
-    panel(
-      "",
-      `<div class="letter">
-        ${LETTER.map((l) => `<p>${esc(l)}</p>`).join("")}
-        <div class="sign"><img class="letter-face" src="${portraitURL("madong")}" alt="" /><span>马董</span><span class="seal-sign">董</span></div>
-      </div>
-      <div class="row center"><button class="btn big" data-act="close">收下</button></div>`,
-      {},
-      {
-        cls: "letter-scroll",
-        closable: false,
-        onClose: () => {
-          game.flags.intro = true;
-          persist();
-          toast(HOW_TO, 6000);
-        },
-      },
+    world.paused = true;
+    playSlides(root.querySelector(".game") as HTMLElement, FLASHBACK, () =>
+      play(PICKUP, () => {
+        game.flags.intro = true;
+        persist();
+        hud();
+        toast(HOW_TO, 6000);
+      }),
     );
   };
 
@@ -1286,6 +1640,8 @@ export function startApp(root: HTMLElement): void {
     const el = (e.target as HTMLElement).closest<HTMLElement>("button");
     if (!el) return;
     if (el.id === "b-stable") openStable();
+    else if (el.id === "b-diary") openDiary();
+    else if (el.id === "b-story") openJournal();
     else if (el.id === "b-menu") openMenu();
     else if (el.dataset.horse) openDetail(el.dataset.horse);
   });
@@ -1328,9 +1684,17 @@ export function startApp(root: HTMLElement): void {
 
   hud();
   persist();
-  if (game.over) {
-    showRuined({ day: game.day - 1, ledger: [], foals: [], sequenced: [], grownUp: [], debtPaid: 0, ruined: true });
+  if (game.performance) {
+    const resumed=resumePerformance(game);if(resumed)runPerformance(resumed);
+  } else if ((game.ending && !game.flags["ending:read"]) || game.over) {
+    showEnding(game.ending ?? "mascot");
   } else {
     intro();
+    if (game.flags.intro) story({ t: "morning" });
+    flushStory();
+    if (game.flags[`ev:${game.day}`] && !game.flags[`settled:${game.day}`] && involved()) {
+      if (!talkEl.hidden) talkThen = eventPrompt;
+      else eventPrompt();
+    }
   }
 }

@@ -113,6 +113,9 @@ export class HorseSim {
   active = false;
   /** 赛场地面摩擦（雨天泥地、冰面等修正会改它）。 */
   groundFriction = 1;
+  groundHeight: (x: number) => number = () => 0;
+  flightTime = 0;
+  private lifted = false;
   private contact = 1;
   /** 前腿、后腿的落脚前移量（弧度），由落脚反射慢慢调出来。 */
   private reachFront = 0.05;
@@ -328,7 +331,7 @@ export class HorseSim {
       let reach = 0;
       for (const l of this.legs) {
         const foot = l.shin.getWorldPoint(new Vec2(0, -l.lower / 2));
-        const gap = foot.y - p.hoofRadius;
+        const gap = foot.y - p.hoofRadius - this.groundHeight(foot.x);
         reach += l.grounded ? 1 : Math.max(0, 1 - gap / REACH);
       }
       const vx = s * this.torso.getLinearVelocity().x;
@@ -356,12 +359,26 @@ export class HorseSim {
     // 腿部支撑：身体被压低到站姿高度以下时，着地的腿像弹簧一样把它托回去。
     if (this.state !== "fallen" && this.contact > 0.2) {
       const pos = this.torso.getPosition();
-      const stand = this.standHeight;
+      const stand = this.standHeight + this.groundHeight(pos.x);
       const sag = stand - pos.y;
       if (sag > 0) {
         const vy = this.torso.getLinearVelocity().y;
         const f = p.totalMass * (SUPPORT_K * sag - SUPPORT_D * Math.min(0, vy)) * this.contact;
         this.torso.applyForceToCenter(new Vec2(0, Math.min(f, p.totalMass * GRAVITY * 2.5)), true);
+      }
+    }
+    if (running && p.wings && this.stamina > p.stamina * 0.25) {
+      const pos = this.torso.getPosition();
+      const speed = Math.abs(this.torso.getLinearVelocity().x);
+      if (speed > 5 && Math.abs(tilt) < 0.35) {
+        if (!this.lifted) {
+          this.torso.applyLinearImpulse(new Vec2(0, p.totalMass * 1.2), pos, true);
+          this.lifted = true;
+        }
+        const lift = Math.min(0.88, speed / 14) * p.totalMass * GRAVITY;
+        this.torso.applyForceToCenter(new Vec2(0, lift), true);
+        this.stamina = Math.max(0, this.stamina - p.staminaDrain * dt * 0.25);
+        if (pos.y > this.standHeight + this.groundHeight(pos.x) + 0.15) this.flightTime += dt;
       }
     }
   }

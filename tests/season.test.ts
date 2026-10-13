@@ -7,8 +7,8 @@ describe("日程", () => {
     expect([1, 2, 3, 4, 5, 6, 7, 8].map(eventFor)).toEqual(["race", "sumo", "race", "sumo", "race", "sumo", "boss", "sumo"]);
   });
 
-  it("每周还一笔债，四周还完", () => {
-    expect([1, 7, 8, 14, 21, 28, 29].map(debtDue)).toEqual([2000, 2000, 8000, 8000, 20000, 30000, 0]);
+  it("7、14、21、31日还款", () => {
+    expect([1, 7, 8, 14, 21, 28, 29, 31, 32].map(debtDue)).toEqual([2000, 2000, 8000, 8000, 20000, 30000, 30000, 30000, 0]);
     expect(weekOf(7)).toBe(1);
     expect(daysUntilDebt(1)).toBe(6);
     expect(daysUntilDebt(7)).toBe(0);
