@@ -4,6 +4,8 @@
 
 设计书：https://claude.ai/artifact/DaNSqNw7RHMibuj1Xo4JcN
 
+开发规划：[整体设计与核心开发阶段](docs/PROJECT_DESIGN.md)（以最新 31 天剧本为目标，列明已实现基础、M0—M5 交付与验收）。参考资料：[剧情正文](docs/reference/STORY_31_DAYS.md)、[已确认流程规格](docs/reference/FLOW_31_DAYS.md)。以下玩法说明仍对应当前检出的实现。
+
 ## 现在能玩什么（M1 第一周）
 
 你继承了外婆的牧场和六万块债。马董每七天来收一笔，第一笔两千，第七天夜里。
