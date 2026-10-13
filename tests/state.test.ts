@@ -25,6 +25,7 @@ import { encodeGenome, randomGenome } from "../src/genome/genome";
 import { BOSS_PRIZE, DAY_START, debtDue, ENTRY_FEE, eventFor, feedCost, RACE_PRIZES, SEQUENCING_FEE, START_MONEY } from "../src/game/season";
 import { express } from "../src/genome/genome";
 import { createRng } from "../src/sim/rng";
+import { answerOffer, offerPending, storyEvent } from "../src/game/story";
 
 const ids = (g: GameState): [string, string] => [g.horses[0]!.id, g.horses[1]!.id];
 
@@ -92,8 +93,44 @@ describe("存档", () => {
       expect(g.money).toBe(money - feed);
       expect(g.debtsPaid).toBe(4);
       expect(g.over).toBe(false);
+      expect(g.ending).toBe(report.day < 31 ? null : "kept");
+      expect(report.ending).toBe(report.day === 31 ? "kept" : null);
     }
     expect(g.ending).toBe("kept");
+  });
+
+  it.each([[29, 1], [30, 1], [29, 8], [30, 8]])("v2第%d天已还清旧档继续收购剧情与杯赛，第%d名在31日晚判定结局", (day, rank) => {
+    let g = deserialize(v2Save(day))!;
+    if (day === 29) {
+      expect(storyEvent(g, { t: "interact", id: "race" }).lines.length).toBeGreaterThan(0);
+      expect(sleep(g).ending).toBeNull();
+    }
+    expect(g.day).toBe(30);
+    expect(g.ending).toBeNull();
+    expect(storyEvent(g, { t: "morning" }).lines.length).toBeGreaterThan(0);
+    expect(offerPending(g)).toBe(true);
+    expect(answerOffer(g, false).length).toBeGreaterThan(0);
+    expect(sleep(g).ending).toBeNull();
+
+    // 午夜前后刷新也不能提前进入结局或丢掉最终比赛分支。
+    g = deserialize(serialize(g))!;
+    expect(g.day).toBe(31);
+    expect(g.ending).toBeNull();
+    expect(storyEvent(g, { t: "morning" }).lines.length).toBeGreaterThan(0);
+    expect(register(g, g.horses[0]!.id).ok).toBe(true);
+    const field = todaysField(g);
+    const order = rank === 1 ? field.map(h => h.id) : field.slice(1).map(h => h.id).concat(field[0]!.id);
+    const outcome = applyOutcome(g, "cup", order);
+    expect(outcome.myRank).toBe(rank);
+    expect(storyEvent(g, { t: "outcome", kind: "cup", rank }).lines.length).toBeGreaterThan(0);
+    expect(g.ending).toBeNull();
+    const report = sleep(g);
+    expect(report.day).toBe(31);
+    expect(report.debtPaid).toBe(0);
+    expect(report.ending).toBe(rank === 1 ? "tianma" : "kept");
+    expect(report.ruined).toBe(false);
+    expect(g.debtsPaid).toBe(4);
+    expect(g.over).toBe(false);
   });
 
   it("v2第28天尚未付第四笔，迁移后在31日付一次三万元", () => {

@@ -20,6 +20,7 @@ import {
   LASSOS_PER_DAY,
   MIDNIGHT,
   salePrice,
+  SEASON_DAYS,
   SEQUENCING_FEE,
   START_MONEY,
   TIME_COST,
@@ -816,9 +817,9 @@ function settleDebt(state: GameState, day: number, report: NightReport): void {
     state.ending = state.cupWon ? "tianma" : "kept";
     report.ending = state.ending;
   };
-  // 已还清的迁移存档可能尚无新版结局，不能仅靠ending阻止重复收款。
+  // 已还清的迁移存档停止扣款，但要等最终杯赛结束后再判定结局。
   if (state.debtsPaid >= DEBT_SCHEDULE.length) {
-    finish();
+    if (day >= SEASON_DAYS) finish();
     return;
   }
   const ruin = (): void => {
@@ -845,7 +846,7 @@ function settleDebt(state: GameState, day: number, report: NightReport): void {
       report.grace = state.grace;
     } else return ruin();
   }
-  if (state.debtsPaid >= DEBT_SCHEDULE.length) {
+  if (state.debtsPaid >= DEBT_SCHEDULE.length && day >= SEASON_DAYS) {
     finish();
   }
 }
