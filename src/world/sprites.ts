@@ -672,49 +672,6 @@ export function personFrame(look: PersonLook, dir: Dir, frame: number): HTMLCanv
   return c;
 }
 
-/* ---------------- 头像 ---------------- */
-
-/** 对话框里的大头像（48×48），画好转成图片地址给界面用。 */
-export function portraitURL(who: "laozhao" | "madong"): string {
-  const [c, ctx] = canvas(48, 48);
-  px(ctx, 0, 0, who === "laozhao" ? "#e9c88c" : "#b9c4d6", 48, 48);
-  for (let y = 0; y < 48; y += 4) px(ctx, 0, y, "rgba(0,0,0,0.05)", 48, 2);
-  if (who === "laozhao") {
-    px(ctx, 8, 34, "#6b3b2a", 32, 14);
-    px(ctx, 8, 34, "#87503a", 32, 2);
-    px(ctx, 21, 34, "#f2c14e", 6, 14);
-    blob(ctx, 24, 20, 12, "#d9a070");
-    px(ctx, 14, 18, "#2a1a12", 4, 2);
-    px(ctx, 30, 18, "#2a1a12", 4, 2);
-    px(ctx, 13, 15, "#7a6a5a", 6, 1);
-    px(ctx, 29, 15, "#7a6a5a", 6, 1);
-    px(ctx, 22, 21, "#c08050", 4, 4);
-    blob(ctx, 24, 31, 9, "#eeeae0");
-    px(ctx, 19, 26, "#c9302a", 10, 2);
-    px(ctx, 12, 8, "#f0bc8a", 24, 3);
-    px(ctx, 11, 22, "#c08050", 2, 4);
-    px(ctx, 35, 22, "#c08050", 2, 4);
-  } else {
-    px(ctx, 6, 34, "#2c2c3a", 36, 14);
-    px(ctx, 20, 34, "#f4f0e6", 8, 14);
-    px(ctx, 23, 34, "#c9302a", 2, 14);
-    px(ctx, 16, 40, "#f2c14e", 16, 1);
-    blob(ctx, 24, 21, 11, "#f0c49a");
-    px(ctx, 13, 8, "#1e1a18", 22, 6);
-    px(ctx, 12, 12, "#1e1a18", 4, 8);
-    px(ctx, 32, 12, "#1e1a18", 4, 8);
-    px(ctx, 14, 18, "#1e1a18", 9, 4);
-    px(ctx, 25, 18, "#1e1a18", 9, 4);
-    px(ctx, 23, 19, "#1e1a18", 2, 1);
-    px(ctx, 15, 18, "#5a6a8a", 3, 1);
-    px(ctx, 26, 18, "#5a6a8a", 3, 1);
-    px(ctx, 19, 27, "#8a4a3a", 10, 1);
-    px(ctx, 28, 26, "#8a4a3a");
-  }
-  outline(c, "#2a1a12");
-  return c.toDataURL();
-}
-
 /* ---------------- 图标 ---------------- */
 
 export type IconId =

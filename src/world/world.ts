@@ -1,12 +1,10 @@
 import { hashSeed } from "../sim/rng";
 import { express } from "../genome/genome";
-import { addCaught, canCatch, HOME, isFoal, throwLasso, walk, wildHerd, type GameState } from "../game/state";
+import { HOME, walk, wildHerd, type GameState } from "../game/state";
 import {
   BUILDINGS,
   INTERACTS,
-  inside,
-  LAOZHAO_SPOT,
-  MAILBOX,
+  CARETAKER_SPOT,
   MAP_H,
   MAP_W,
   METERS_PER_TILE,
@@ -15,12 +13,10 @@ import {
   PROPS,
   regionAt,
   T,
-  TIEDUN_SPOT,
   TILE,
   tileAt,
   walkable,
   WILDS,
-  YARD,
   FENCES,
   crossesFence,
   type Fence,
@@ -29,27 +25,18 @@ import {
   type Prop,
   type PropKind,
 } from "./tiles";
-import { banner, bubble, floatText, nameTag, signText, thinkBubble } from "./labels";
-import { bakeGround, canvas, icon, personFrame, PLAYER_LOOK, type Dir, type PersonLook } from "./sprites";
+import { banner, bubble, nameTag, signText, thinkBubble } from "./labels";
+import { bakeGround, canvas, personFrame, PLAYER_LOOK, type Dir, type PersonLook } from "./sprites";
 import { propSprite } from "./props";
 import { buildingHeight, buildingSprite } from "./buildingArt";
 import { HorsePuppet } from "./puppet";
 import { Ambient } from "./ambient";
 import { ambientAt, Lighting, type Light } from "./lighting";
 import { Minimap, type MapMarks } from "./minimap";
-import { drawCharacter, drawProp } from "../render/storyAssets";
-import { hasWings } from "../game/activities";
 import { boxFootprint, roundFootprint, Sunlight, type SunCaster } from "./sunlight";
 
 export interface WorldHooks {
   onInteract(id: InteractId): void;
-  onHorseClick(horseId: string): void;
-  onCaught(horseId: string, name: string): void;
-  onToast(text: string): void;
-  /** 走到某个交互点跟前（剧情用：「去马厩看看」）。 */
-  onNear?(id: InteractId): void;
-  onLasso?(): void;
-  /** 状态变了（钱、马、套索），让界面刷新。 */
   onChange(): void;
 }
 
@@ -61,8 +48,8 @@ interface Npc {
 }
 
 const NPCS: Npc[] = [
-  // 老赵，擂台边上。
-  { look: { hat: "none", hair: "#e8e2d6", skin: "#d9a070", shirt: "#6b3b2a", shirtDark: "#4a2618", pants: "#3a2a20", beard: true, wide: true }, x: LAOZHAO_SPOT.x, z: LAOZHAO_SPOT.z, dir: "down" },
+  // 看场人，擂台边上。
+  { look: { hat: "none", hair: "#e8e2d6", skin: "#d9a070", shirt: "#6b3b2a", shirtDark: "#4a2618", pants: "#3a2a20", beard: true, wide: true }, x: CARETAKER_SPOT.x, z: CARETAKER_SPOT.z, dir: "down" },
   // 赌马的伙计、研究所的研究员、马市的贩子、报名处的姑娘。
   { look: { hat: "cap", hair: "#2a1a12", skin: "#e2b893", shirt: "#8e2519", shirtDark: "#5e1810", pants: "#2a2a30" }, x: 38.8, z: 11.6, dir: "down" },
   { look: { hat: "none", hair: "#3a3a3a", skin: "#ecc6a0", shirt: "#f4f0e6", shirtDark: "#c8c2b4", pants: "#3f4a52" }, x: 118.2, z: 13.4, dir: "down" },
@@ -74,33 +61,11 @@ const NPCS: Npc[] = [
   { look: { hat: "straw", hair: "#5a3a22", skin: "#d8a77e", shirt: "#7a8a5a", shirtDark: "#5a6a3e", pants: "#3a3a4a" }, x: 75.5, z: 46.2, dir: "down" },
 ];
 
-/** 存档里记一笔：已经换到这一版的大地图了。 */
-const MAP_FLAG = "map:v3";
-
 /** 走、跑的速度（格/秒）。 */
 const WALK = 4.5;
 const RUN = 8;
-/** 套索能扔多远（格）。 */
-const THROW_RANGE = 7;
 /** 大世界里马的比例：每米多少像素。 */
 const HORSE_PPM = 12;
-
-interface Rope {
-  target: HorsePuppet;
-  t: number;
-  dur: number;
-  hit: boolean;
-}
-
-interface Tug {
-  horse: HorsePuppet;
-  tension: number;
-  progress: number;
-  yankIn: number;
-  high: number;
-  low: number;
-  strength: number;
-}
 
 interface Hit {
   x: number;
@@ -168,7 +133,6 @@ export class WorldScene {
   private paddock: HorsePuppet[] = [];
   private herd: HorsePuppet[] = [];
   private herdDay = -1;
-  private tiedun: HorsePuppet | null = null;
   private keys = new Set<string>();
   private target: { x: number; z: number } | null = null;
   private dir: Dir = "down";
@@ -185,10 +149,6 @@ export class WorldScene {
   private nearby: Interactable | null = null;
   private region = "";
   private banner: { text: string; t: number } | null = null;
-  private rope: Rope | null = null;
-  private tug: Tug | null = null;
-  private holding = false;
-  private float: Array<{ text: string; x: number; z: number; t: number; color: string }> = [];
   private zoom = 3;
   private readonly ambient = new Ambient();
   private readonly lighting = new Lighting();
@@ -206,11 +166,18 @@ export class WorldScene {
   private last = 0;
   /** 画面上的钟：做了事以后时间一下子跳过去，天色跟着几秒内慢慢转过去。 */
   private shown = 0;
-  /** 上回在哪片地方算过路上的时间。 */
-  /** 任务箭头指向的位置（格子坐标）；没有任务时为 null。 */
-  marker: { x: number; z: number } | null = null;
-  /** 打开面板、比赛进行中时暂停世界（时钟也停）。 */
-  paused = false;
+  /** 打开面板时暂停世界。 */
+  private isPaused = false;
+  get paused(): boolean { return this.isPaused; }
+  set paused(value: boolean) {
+    this.isPaused = value;
+    if (value) {
+      this.keys.clear();
+      this.target = null;
+      this.running = false;
+      this.moving = false;
+    }
+  }
   active = true;
 
   constructor(canvasEl: HTMLCanvasElement, state: GameState, hooks: WorldHooks) {
@@ -250,33 +217,28 @@ export class WorldScene {
     return Math.abs(this.state.clock - this.shown) < 0.5;
   }
 
-  /** 旧存档里的位置是旧地图的坐标（或者站不住），挪回家门口。 */
+  /** 存档位置站不住时，挪回家门口。 */
   private fixPlayer(): void {
     const s = this.state;
-    if (!s.flags[MAP_FLAG]) {
-      s.flags[MAP_FLAG] = true;
-      s.player = { ...HOME };
-    }
     if (!walkable(s.player.x, s.player.z)) s.player = { ...HOME };
   }
 
-  /** 马厩里的马变了、换了一天：重建牧场里的马和野马群。 */
+  /** 换了一天：重建牧场里的马和野马群。 */
   sync(): void {
     const s = this.state;
     const keep = new Map(this.paddock.map((p) => [p.id, p]));
     this.paddock = s.horses.map((h, i) => {
-      const scale = isFoal(h, s.day) ? 0.62 : 1;
+      const scale = 1;
       const old = keep.get(h.id);
-      if (old && old.scale === scale && old.genome === h.genome && old.name === h.name && old.plan.wings === hasWings(h)) return old;
+      if (old && old.scale === scale && old.genome === h.genome && old.name === h.name) return old;
       const rx = PADDOCK.x0 + 2 + ((hashSeed(h.id) % 1000) / 1000) * (PADDOCK.x1 - PADDOCK.x0 - 4);
       const rz = PADDOCK.z0 + 3 + (i % 4) * ((PADDOCK.z1 - PADDOCK.z0 - 5) / 3);
-      return new HorsePuppet(h.id, h.name, h.genome, rx, rz, scale, hasWings(h));
+      return new HorsePuppet(h.id, h.name, h.genome, rx, rz, scale);
     });
     if (this.herdDay !== s.day) {
       this.herdDay = s.day;
-      this.herd = wildHerd(s, 0, 6)
+      this.herd = wildHerd(s)
         .map((w, i) => ({ w, i }))
-        .filter(({ i }) => !s.flags[`caught:${s.day}:${i}`])
         .map(({ w, i }) => {
           let cx = WILDS.x0 + 4 + ((hashSeed(`${s.day}:${i}`) % 100) / 100) * (WILDS.x1 - WILDS.x0 - 8);
           let cz = WILDS.z0 + 4 + ((hashSeed(`z${s.day}:${i}`) % 100) / 100) * (WILDS.z1 - WILDS.z0 - 8);
@@ -287,10 +249,6 @@ export class WorldScene {
           return new HorsePuppet(`wild:${s.day}:${i}`, w.name, w.genome, cx, cz);
         });
     }
-    if (!this.tiedun) {
-      const t = s.rivals.find((r) => r.id === "r-tiedun");
-      if (t) this.tiedun = new HorsePuppet(t.id, t.name, t.genome, TIEDUN_SPOT.x, TIEDUN_SPOT.z);
-    }
   }
 
   destroy(): void {
@@ -299,7 +257,7 @@ export class WorldScene {
     window.removeEventListener("keyup", this.onKeyUp);
   }
 
-  /** 把人物传送到某处（比赛结束回到场边）。 */
+  /** 把人物传送到某处。 */
   teleport(x: number, z: number): void {
     this.state.player.x = x;
     this.state.player.z = z;
@@ -316,7 +274,6 @@ export class WorldScene {
     if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", "shift", " "].includes(k)) e.preventDefault();
     this.keys.add(k);
     if (k === "shift") this.running = true;
-    if (k === " ") this.holding = true;
     if ((k === "e" || k === "enter") && this.nearby) this.hooks.onInteract(this.nearby.id);
     this.target = null;
   };
@@ -325,7 +282,6 @@ export class WorldScene {
     const k = e.key.toLowerCase();
     this.keys.delete(k);
     if (k === "shift") this.running = false;
-    if (k === " ") this.holding = false;
   };
 
   private toBuffer(e: PointerEvent): [number, number] {
@@ -348,10 +304,6 @@ export class WorldScene {
       if (!this.active || this.paused) return;
       const [x, y] = this.toBuffer(e);
       this.canvas.setPointerCapture(e.pointerId);
-      if (this.tug) {
-        this.holding = true;
-        return;
-      }
       const h = this.hitAt(x, y);
       if (h) return h.act();
       this.target = { x: (this.camX + x) / TILE, z: (this.camY + y) / TILE };
@@ -360,11 +312,6 @@ export class WorldScene {
       const [x, y] = this.toBuffer(e);
       this.canvas.style.cursor = this.hitAt(x, y) ? "pointer" : "";
     });
-    const up = (): void => {
-      this.holding = false;
-    };
-    this.canvas.addEventListener("pointerup", up);
-    this.canvas.addEventListener("pointercancel", up);
   }
 
   /* ---------------- 更新 ---------------- */
@@ -406,23 +353,19 @@ export class WorldScene {
   private update(dt: number): void {
     this.time += dt;
     const s = this.state;
-    // 时间不会自己走：按走过的路程记时间，攒够一段路才花一刻钟。传送（比赛完回场边）不算。
+    // 按走过的路程记时间，攒够一段路才花一刻钟。传送不算。
     const [x0, z0] = [s.player.x, s.player.z];
     this.movePlayer(dt);
     const step = Math.hypot(s.player.x - x0, s.player.z - z0);
     if (step > 0 && step < 2 && walk(s, step) > 0) this.hooks.onChange();
     this.updatePaddock(dt);
     this.updateHerd(dt);
-    this.tiedun?.update(dt);
-    this.updateLasso(dt);
     this.ambient.update(dt, { cx: this.camX, cy: this.camY, bw: this.buf.width, bh: this.buf.height }, this.shown, {
       x: s.player.x,
       z: s.player.z,
       running: this.running,
       moving: this.moving,
     });
-    for (const f of this.float) f.t += dt;
-    this.float = this.float.filter((f) => f.t < 1.6);
     if (this.banner) {
       this.banner.t += dt;
       if (this.banner.t > 2.6) this.banner = null;
@@ -442,16 +385,11 @@ export class WorldScene {
         bestD = d;
       }
     }
-    if (best && best !== this.nearby) this.hooks.onNear?.(best.id);
     this.nearby = best;
   }
 
   private movePlayer(dt: number): void {
     const p = this.state.player;
-    if (this.tug || this.rope) {
-      this.moving = false;
-      return;
-    }
     let dx = 0;
     let dz = 0;
     if (this.keys.has("w") || this.keys.has("arrowup")) dz -= 1;
@@ -522,10 +460,6 @@ export class WorldScene {
   private updateHerd(dt: number): void {
     const p = this.state.player;
     for (const h of this.herd) {
-      if (h.roped) {
-        h.update(dt);
-        continue;
-      }
       const dx = h.x - p.x;
       const dz = h.z - p.z;
       const d = Math.hypot(dx, dz);
@@ -572,100 +506,6 @@ export class WorldScene {
       h.z = Math.max(WILDS.z0 + 1, Math.min(WILDS.z1 - 1, h.z));
       h.update(dt);
     }
-  }
-
-  /* ---------------- 套马 ---------------- */
-
-  private throwAt(h: HorsePuppet): void {
-    const s = this.state;
-    const ok = canCatch(s);
-    if (!ok.ok) {
-      this.hooks.onToast(ok.reason);
-      return;
-    }
-    const d = Math.hypot(h.x - s.player.x, h.z - s.player.z);
-    if (d > THROW_RANGE) {
-      const k = (d - THROW_RANGE + 1) / d;
-      this.target = { x: s.player.x + (h.x - s.player.x) * k, z: s.player.z + (h.z - s.player.z) * k };
-      return;
-    }
-    const thrown = throwLasso(s);
-    if (thrown.ok) this.hooks.onLasso?.();
-    if (!thrown.ok) {
-      this.hooks.onToast(thrown.reason);
-      return;
-    }
-    this.hooks.onChange();
-    const chance = Math.max(0.15, Math.min(0.9, 1 - d / 9 - (h.speed * METERS_PER_TILE) / 22));
-    const dx = h.x - s.player.x;
-    const dz = h.z - s.player.z;
-    this.dir = Math.abs(dx) > Math.abs(dz) ? (dx > 0 ? "right" : "left") : dz > 0 ? "down" : "up";
-    this.rope = { target: h, t: 0, dur: 0.35 + d * 0.05, hit: Math.random() < chance };
-  }
-
-  private updateLasso(dt: number): void {
-    const s = this.state;
-    if (this.rope) {
-      this.rope.t += dt;
-      if (this.rope.t >= this.rope.dur) {
-        const h = this.rope.target;
-        if (this.rope.hit) {
-          h.roped = true;
-          const p = express(h.genome);
-          const strength = Math.max(0.6, Math.min(2, (h.plan.totalMass / 650) * (1 + 0.2 * p.power) * (1 - 0.12 * p.courage)));
-          this.tug = { horse: h, tension: 0.45, progress: 0, yankIn: 0.6, high: 0, low: 0, strength };
-          this.floatText("套中了", h.x, h.z, "#f6d05a");
-        } else this.floatText("没套中", h.x, h.z, "#fbefd4");
-        this.rope = null;
-      }
-    }
-    const tug = this.tug;
-    if (!tug) return;
-    const h = tug.horse;
-    // 马往远处挣，人往回拉。
-    const dx = h.x - s.player.x;
-    const dz = h.z - s.player.z;
-    const d = Math.hypot(dx, dz) || 1;
-    const pull = (0.8 + tug.strength * 0.6) / METERS_PER_TILE;
-    h.vx = (dx / d) * pull * (0.6 + tug.tension);
-    h.vz = (dz / d) * pull * (0.6 + tug.tension);
-    if (d > THROW_RANGE + 1.5) {
-      h.x = s.player.x + (dx / d) * (THROW_RANGE + 1.5);
-      h.z = s.player.z + (dz / d) * (THROW_RANGE + 1.5);
-    }
-    tug.tension += (this.holding ? 0.85 : -0.6) * dt;
-    tug.yankIn -= dt;
-    if (tug.yankIn <= 0) {
-      tug.tension += 0.12 + Math.random() * 0.22 * tug.strength;
-      tug.yankIn = (0.5 + Math.random() * 0.9) / Math.sqrt(tug.strength);
-    }
-    tug.tension = Math.max(0, Math.min(1.05, tug.tension));
-    const inZone = tug.tension > 0.35 && tug.tension < 0.78;
-    if (inZone) tug.progress += dt * (0.5 / Math.sqrt(tug.strength));
-    tug.high = tug.tension > 0.95 ? tug.high + dt : 0;
-    tug.low = tug.tension < 0.12 ? tug.low + dt : 0;
-    if (tug.progress >= 1) {
-      const idx = this.herd.indexOf(h);
-      const herdIdx = Number(h.id.split(":")[2]);
-      s.flags[`caught:${s.day}:${herdIdx}`] = true;
-      if (idx >= 0) this.herd.splice(idx, 1);
-      const horse = addCaught(s, h.name, h.genome);
-      this.tug = null;
-      this.holding = false;
-      this.sync();
-      this.hooks.onCaught(horse.id, horse.name);
-    } else if (tug.high > 0.45 || tug.low > 1.3) {
-      this.floatText(tug.high > 0.45 ? "绳子断了" : "挣脱了", h.x, h.z, "#fbefd4");
-      h.roped = false;
-      h.vx = (dx / d) * 6;
-      h.vz = (dz / d) * 6;
-      this.tug = null;
-      this.holding = false;
-    }
-  }
-
-  private floatText(text: string, x: number, z: number, color: string): void {
-    this.float.push({ text, x, z, t: 0, color });
   }
 
   /* ---------------- 画面 ---------------- */
@@ -829,22 +669,6 @@ export class WorldScene {
       items.push({ y: f.horizontal ? y + 1 : y + TILE, draw: () => drawFence(b, x - cx, y - cy, f) });
     }
 
-    const sets = [
-      { x: 85, z: 30, prop: 0, size: 100, day: 8 },
-      { x: 73, z: 74, prop: 8, size: 62, day: 12 },
-      { x: 94, z: 74, prop: 9, size: 56, day: 12 },
-      { x: 131, z: 75, prop: 10, size: 66, day: 15 },
-      { x: 79, z: 97, prop: 11, size: 76, day: 16 },
-      { x: 132, z: 97, prop: 12, size: 64, day: 23 },
-    ];
-    for (const set of sets) {
-      const x = set.x * TILE, y = set.z * TILE;
-      if (s.day >= set.day && visible(x, y, set.size)) items.push({ y, draw: () => { drawProp(b,set.prop,x-cx,y-cy,set.size); } });
-    }
-    if (s.day >= 8) {
-      const x=83*TILE,y=32*TILE;
-      if (visible(x,y,35)) items.push({y,draw:()=>{ drawCharacter(b,"米娅",Math.floor(t*2)%4===1?1:0,x-cx,y-cy,34); }});
-    }
     // 人物和马。
     for (const n of NPCS) {
       const x = n.x * TILE;
@@ -860,7 +684,7 @@ export class WorldScene {
         },
       });
     }
-    const horseItem = (h: HorsePuppet, onClick: (() => void) | null, tag: string | null, mark: boolean): void => {
+    const horseItem = (h: HorsePuppet, tag: string | null): void => {
       const x = h.x * TILE;
       const y = h.z * TILE;
       const sunHeight = (Math.max(h.plan.legFront, h.plan.legRear) + h.plan.torsoHeight + h.plan.neckLength * 0.6) * HORSE_PPM * h.scale;
@@ -872,31 +696,23 @@ export class WorldScene {
           shadow(b, x - cx, y - cy, Math.round(11 * h.scale));
           const r = h.drawPixel(b, x - cx, y - cy, HORSE_PPM, (img, sx, sy) =>
             this.sunlight.drawSprite(b, img, sx, sy, x, y, img.width / 2, img.height - 3, "", h.facing < 0, true));
-          if (onClick) this.hits.push({ x: r.x, y: r.y, w: r.w, h: r.h, act: onClick });
           if (r.bubble) {
             const { text, x: bx, y: by } = r.bubble;
             const [Z, k] = [this.screenPx, this.textPx];
             this.labels.push((sc) => thinkBubble(sc, Math.round(bx) * Z, Math.round(by) * Z, text, k));
           }
           // 马头顶的高度：按体型估，不用缓冲画布的上沿（那里留了空白）。
-          const top = Math.round(y - cy - 2.5 * HORSE_PPM * h.scale);
           if (tag && Math.hypot(h.x - s.player.x, h.z - s.player.z) < 5) {
             // 名牌放在画出来的马最高处（头或耳朵）上面一点，居中对着马身。
             const head = Math.round(y - cy) - h.headHeight();
             const [sx, sy, k] = [Math.round(x - cx) * this.screenPx, (head - 3) * this.screenPx, this.textPx];
             this.labels.push((sc) => nameTag(sc, sx, sy, tag, k));
           }
-          if (mark) drawArrow(b, Math.round(x - cx), top - 10 + Math.round(Math.sin(t * 6) * 1.5));
         },
       });
     };
-    for (const h of this.paddock) horseItem(h, () => this.hooks.onHorseClick(h.id), h.name, false);
-    const inWilds = inside(WILDS, s.player.x, s.player.z) || this.region === "wilds";
-    for (const h of this.herd) {
-      const near = Math.hypot(h.x - s.player.x, h.z - s.player.z) <= THROW_RANGE;
-      horseItem(h, () => this.throwAt(h), null, inWilds && near && !this.tug && !this.rope);
-    }
-    if (this.tiedun) horseItem(this.tiedun, null, inside(YARD, s.player.x, s.player.z + 3) ? this.tiedun.name : null, false);
+    for (const h of this.paddock) horseItem(h, h.name);
+    for (const h of this.herd) horseItem(h, null);
 
     this.sunlight.castActor(px, pz, 4, 23);
     items.push({
@@ -905,7 +721,6 @@ export class WorldScene {
         shadow(b, px - cx, pz - cy, 5);
         const frame = this.moving ? Math.floor(this.walkPhase) % 4 : 0;
         this.sunlight.drawSprite(b, personFrame(PLAYER_LOOK, this.dir, frame), Math.round(px - 9 - cx), Math.round(pz - 26 - cy), px, pz, 9, 26);
-        this.drawRope(b, cx, cy);
       },
     });
 
@@ -926,7 +741,7 @@ export class WorldScene {
     }
     this.ambient.drawNight(b, view, amb.night);
 
-    this.drawOverlay(b, cx, cy, bw, bh);
+    this.drawOverlay(cx, cy, bw);
 
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1036,52 +851,10 @@ export class WorldScene {
       }
   }
 
-  private drawRope(b: CanvasRenderingContext2D, cx: number, cy: number): void {
-    const pl = this.state.player;
-    const hx = pl.x * TILE - cx + (this.dir === "left" ? -5 : 5);
-    const hy = pl.z * TILE - cy - 14;
-    let tx: number;
-    let ty: number;
-    if (this.rope) {
-      const h = this.rope.target;
-      const k = this.rope.t / this.rope.dur;
-      const ex = h.x * TILE - cx;
-      const ey = h.z * TILE - cy - 18 * h.scale;
-      tx = hx + (ex - hx) * k;
-      ty = hy + (ey - hy) * k - Math.sin(k * Math.PI) * 18;
-    } else if (this.tug) {
-      const h = this.tug.horse;
-      tx = h.x * TILE - cx + 10 * h.facing;
-      ty = h.z * TILE - cy - 18 * h.scale;
-    } else return;
-    b.strokeStyle = "#e0bd7a";
-    b.lineWidth = 1;
-    b.beginPath();
-    b.moveTo(Math.round(hx) + 0.5, Math.round(hy) + 0.5);
-    const sag = this.tug ? (1 - this.tug.tension) * 10 : 0;
-    b.quadraticCurveTo((hx + tx) / 2, (hy + ty) / 2 + sag, Math.round(tx) + 0.5, Math.round(ty) + 0.5);
-    b.stroke();
-    if (this.rope) {
-      b.beginPath();
-      b.ellipse(Math.round(tx) + 0.5, Math.round(ty) + 0.5, 5, 3, 0, 0, Math.PI * 2);
-      b.stroke();
-    }
-  }
-
-  private drawOverlay(b: CanvasRenderingContext2D, cx: number, cy: number, bw: number, bh: number): void {
+  private drawOverlay(cx: number, cy: number, bw: number): void {
     const Z = this.screenPx;
     const k = this.textPx;
-    for (const f of this.float) {
-      const x = (f.x * TILE - cx) * Z;
-      const y = (f.z * TILE - cy - 36) * Z - f.t * 12 * k;
-      const alpha = Math.max(0, 1 - f.t / 1.6);
-      this.labels.push((sc) => {
-        sc.globalAlpha = alpha;
-        floatText(sc, x, y, f.text, f.color, k);
-        sc.globalAlpha = 1;
-      });
-    }
-    if (this.nearby && !this.tug) {
+    if (this.nearby) {
       const it = this.nearby;
       const x = Math.round(it.x * TILE - cx) * Z;
       const y = Math.round(it.z * TILE - cy - 30) * Z;
@@ -1091,15 +864,6 @@ export class WorldScene {
         this.hits.push({ x: r.x / Z, y: r.y / Z, w: r.w / Z, h: r.h / Z, act: () => this.hooks.onInteract(it.id) });
       });
     }
-    if (this.tug) {
-      const y0 = drawTugGauge(b, bw, bh, this.tug);
-      this.labels.push((sc) => floatText(sc, (bw / 2) * Z, (y0 - 11) * Z - (13 * k) / 2, "按住拉绳", "#fbefd4", k));
-    }
-    if (this.state.story.inbox.length) {
-      const bob = Math.floor(this.time * 3) % 2;
-      drawBang(b, Math.round(MAILBOX.x * TILE - cx), Math.round(MAILBOX.z * TILE - cy - 26 - bob));
-    }
-    if (this.marker && !this.tug) drawMarker(b, this.marker.x * TILE - cx, this.marker.z * TILE - cy, bw, bh, this.time);
     if (this.banner) {
       const t = this.banner.t;
       const slide = t < 0.3 ? (0.3 - t) / 0.3 : t > 2.2 ? (t - 2.2) / 0.4 : 0;
@@ -1328,23 +1092,6 @@ function drawFlames(b: CanvasRenderingContext2D, x: number, y: number, t: number
   }
 }
 
-/** 可以套的马头上一个上下跳的黄色箭头。 */
-function drawArrow(b: CanvasRenderingContext2D, ax: number, ay: number): void {
-  b.fillStyle = "#2a1a12";
-  b.fillRect(ax - 5, ay - 1, 11, 4);
-  b.fillRect(ax - 4, ay + 3, 9, 2);
-  b.fillRect(ax - 3, ay + 5, 7, 2);
-  b.fillRect(ax - 2, ay + 7, 5, 2);
-  b.fillRect(ax - 1, ay + 9, 3, 1);
-  b.fillStyle = "#f6d05a";
-  b.fillRect(ax - 4, ay, 9, 3);
-  b.fillRect(ax - 3, ay + 3, 7, 2);
-  b.fillRect(ax - 2, ay + 5, 5, 2);
-  b.fillRect(ax - 1, ay + 7, 3, 2);
-  b.fillStyle = "#fff2b0";
-  b.fillRect(ax - 3, ay, 3, 1);
-}
-
 /** 上半截（树冠、草尖）错开 dx 个像素，下半截不动。 */
 function drawSway(b: CanvasRenderingContext2D, img: HTMLCanvasElement, x: number, y: number, dx: number, split: number): void {
   if (dx === 0) {
@@ -1363,108 +1110,4 @@ function drawFlag(b: CanvasRenderingContext2D, img: HTMLCanvasElement, x: number
     const off = Math.round(Math.sin(t * 6 - col * 0.7) * ((col - 3) / 6));
     b.drawImage(img, col, 0, 1, 14, x + col, y + off, 1, 14);
   }
-}
-
-/** 信箱上的感叹号：有新信。 */
-function drawBang(b: CanvasRenderingContext2D, x: number, y: number): void {
-  b.fillStyle = "#2a1a12";
-  b.fillRect(x - 3, y - 1, 6, 12);
-  b.fillRect(x - 3, y + 12, 6, 5);
-  b.fillStyle = "#f6d05a";
-  b.fillRect(x - 2, y, 4, 10);
-  b.fillRect(x - 2, y + 13, 4, 3);
-}
-
-/**
- * 任务箭头：目标在画面里就在它头顶上下跳；在画面外就贴着画面边缘，指向它的方向。
- */
-function drawMarker(b: CanvasRenderingContext2D, tx: number, ty: number, bw: number, bh: number, time: number): void {
-  const bob = Math.round(Math.sin(time * 5) * 2);
-  const margin = 14;
-  const onScreen = tx > margin && tx < bw - margin && ty - 30 > margin && ty < bh - margin;
-  if (onScreen) {
-    const x = Math.round(tx);
-    const y = Math.round(ty - 34 + bob);
-    b.fillStyle = "#2a1a12";
-    b.fillRect(x - 6, y - 1, 13, 4);
-    b.fillRect(x - 5, y + 3, 11, 2);
-    b.fillRect(x - 4, y + 5, 9, 2);
-    b.fillRect(x - 3, y + 7, 7, 2);
-    b.fillRect(x - 2, y + 9, 5, 2);
-    b.fillRect(x - 1, y + 11, 3, 2);
-    b.fillStyle = "#f6d05a";
-    b.fillRect(x - 5, y, 11, 2);
-    b.fillRect(x - 4, y + 2, 9, 2);
-    b.fillRect(x - 3, y + 4, 7, 2);
-    b.fillRect(x - 2, y + 6, 5, 2);
-    b.fillRect(x - 1, y + 8, 3, 2);
-    b.fillStyle = "#fff6c0";
-    b.fillRect(x - 4, y, 3, 1);
-    return;
-  }
-  // 画面外：从画面中心朝目标方向，贴边画一个小三角。
-  const cx = bw / 2;
-  const cy = bh / 2;
-  const ang = Math.atan2(ty - 16 - cy, tx - cx);
-  const ex = Math.max(margin, Math.min(bw - margin, cx + Math.cos(ang) * bw));
-  const ey = Math.max(margin, Math.min(bh - margin, cy + Math.sin(ang) * bh));
-  const ox = Math.round(ex - Math.cos(ang) * (2 + bob));
-  const oy = Math.round(ey - Math.sin(ang) * (2 + bob));
-  for (let i = 0; i < 6; i++) {
-    const w = 6 - i;
-    const px = Math.round(ox + Math.cos(ang) * (i - 3) * 1.5);
-    const py = Math.round(oy + Math.sin(ang) * (i - 3) * 1.5);
-    b.fillStyle = "#2a1a12";
-    b.fillRect(px - w - 1, py - w - 1, w * 2 + 2, w * 2 + 2);
-  }
-  for (let i = 0; i < 6; i++) {
-    const w = 5 - i;
-    if (w <= 0) continue;
-    const px = Math.round(ox + Math.cos(ang) * (i - 3) * 1.5);
-    const py = Math.round(oy + Math.sin(ang) * (i - 3) * 1.5);
-    b.fillStyle = "#f6d05a";
-    b.fillRect(px - w, py - w, w * 2, w * 2);
-  }
-}
-
-function woodPlank(b: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
-  b.fillStyle = "#2a1a12";
-  b.fillRect(x - 1, y - 1, w + 2, h + 2);
-  b.fillStyle = "#a8622c";
-  b.fillRect(x, y, w, h);
-  b.fillStyle = "#d08a44";
-  b.fillRect(x, y, w, 2);
-  b.fillStyle = "#7a4218";
-  b.fillRect(x, y + h - 2, w, 2);
-  b.fillStyle = "#f2c14e";
-  b.fillRect(x + 3, y + h / 2 - 1, 2, 2);
-  b.fillRect(x + w - 5, y + h / 2 - 1, 2, 2);
-}
-
-/** 拔河仪表：木框里一根张力条，绿区里才算拉近。画在缓冲里，返回张力条的顶边（字另外画在屏幕上）。 */
-function drawTugGauge(b: CanvasRenderingContext2D, bw: number, bh: number, tug: Tug): number {
-  const w = Math.min(150, bw - 20);
-  const x0 = Math.round(bw / 2 - w / 2);
-  const y0 = bh - 64;
-  woodPlank(b, x0 - 8, y0 - 18, w + 16, 46);
-  b.drawImage(icon("rope"), x0 - 4, y0 - 16);
-  b.fillStyle = "#2a1a12";
-  b.fillRect(x0 - 1, y0 - 1, w + 2, 12);
-  b.fillStyle = "#4a3020";
-  b.fillRect(x0, y0, w, 10);
-  b.fillStyle = "#6abf45";
-  b.fillRect(x0 + Math.round(w * 0.35), y0 + 1, Math.round(w * 0.43), 8);
-  b.fillStyle = "#e0453a";
-  b.fillRect(x0 + Math.round(w * 0.95), y0 + 1, Math.round(w * 0.05), 8);
-  const nx = x0 + Math.round(Math.min(1, tug.tension) * w);
-  b.fillStyle = "#fbefd4";
-  b.fillRect(nx - 1, y0 - 3, 3, 16);
-  b.fillStyle = "#2a1a12";
-  b.fillRect(nx - 2, y0 - 4, 5, 1);
-  b.fillRect(x0 - 1, y0 + 14, w + 2, 6);
-  b.fillStyle = "#6a4a2a";
-  b.fillRect(x0, y0 + 15, w, 4);
-  b.fillStyle = "#f6d05a";
-  b.fillRect(x0, y0 + 15, Math.round(w * Math.min(1, tug.progress)), 4);
-  return y0;
 }

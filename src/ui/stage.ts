@@ -9,7 +9,6 @@ import { STEP, type Race } from "../sim/race";
 import { hashSeed } from "../sim/rng";
 import { lightSprite } from "../world/lighting";
 import { drawPixelHorse, PixelSurface, pixelBox, pixelText, PX } from "./pixelCanvas";
-import { drawCharacter, drawProp } from "../render/storyAssets";
 import { groundHeight, TERRAIN_LABELS, terrainAt } from "../sim/terrain";
 
 /** 看台离镜头比最后一条泳道还远一点，按这个比例慢一些地滚动（视差）。 */
@@ -19,7 +18,7 @@ const SECTION = 24;
 
 const NECK_ANGLE = 0.95;
 
-export type StageMode = "preview" | "trial" | "race" | "circus";
+export type StageMode = "preview" | "trial" | "race";
 
 interface Dust {
   lane: number;
@@ -38,7 +37,6 @@ export interface StageOptions {
   onFinish?: (race: Race) => void;
   onTick?: (race: Race) => void;
   title?: string;
-  program?: "haul" | "jump" | "balance";
 }
 
 /**
@@ -189,12 +187,6 @@ export class Stage {
     else drawTrackDetails(ctx, W, H, this.time, this.camX * front.ppm, front.groundY, front.ppm * 2.5, PX);
     if (mode === "trial") this.drawMeterMarks(front, palette.rim);
     if (race?.options.terrains) this.drawTerrain(front, race, H);
-    if (mode === "circus") {
-      drawProp(ctx,0,W*0.83,H*0.66,Math.min(380,H*0.65));
-      drawProp(ctx,7,W*0.26,H*0.65,Math.min(250,H*0.4));
-      if(this.opts.program==="jump")drawProp(ctx,5,W*0.68,H*0.87,Math.min(170,H*0.27));
-      if(this.opts.program==="balance")drawProp(ctx,6,W*0.57,H*0.93,Math.min(220,H*0.34));
-    }
 
     if (!race) {
       this.surface.present();
@@ -211,13 +203,7 @@ export class Stage {
       // 远处的马淡一点，突出玩家的马。
       const bubble = drawPixelHorse(ctx, pose, r.horse.plan, look, view, mode === "race" ? 1 - 0.05 * lane : 1);
       if (bubble) bubbles.push(bubble);
-      if(mode==="circus"&&this.opts.program==="haul"){
-        const [hx,hy]=toScreen(view,pose.torso);
-        drawProp(ctx,4,hx-view.ppm*3,view.groundY,view.ppm*2.5);
-        ctx.strokeStyle="#b69467";ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(hx-view.ppm*1.9,hy);ctx.lineTo(hx-view.ppm*0.4,hy);ctx.stroke();
-      }
     }
-    if (mode === "circus") drawCharacter(ctx,"米娅",Math.floor(this.wall*2)%3===2?2:1,W*0.93,H*0.92,Math.min(210,H*0.27));
     if (mode === "race") this.drawForeground(front, palette);
     const screen = this.surface.present();
     if(this.opts.title)pixelText(screen,this.opts.title,W/2,30,{color:"#fbefd4",align:"center"});
@@ -261,9 +247,6 @@ export class Stage {
       c.fillStyle = "#6b4b30";c.fillRect(Math.round(sx), Math.round(sy), view.ppm * 3, 9);
       c.fillStyle = "#385c42";c.fillRect(Math.round(sx + 9), Math.round(sy - 12), view.ppm * 2, 12);
     }
-    const current = terrainAt(this.camX, distance, terrains);
-    if (current === "coast") drawProp(c, 10, view.width * 0.83, view.groundY - 40, 190);
-    if (current === "mountain") drawProp(c, 9, view.width * 0.82, view.groundY - 40, 190);
   }
 
   /**
