@@ -30,7 +30,6 @@ export class HorsePuppet {
   tx: number;
   tz: number;
   /** 被套住了：AI 停下，由套马逻辑控制。 */
-  roped = false;
   private world!: World;
   private sim!: HorseSim;
   private acc = 0;

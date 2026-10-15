@@ -2,7 +2,7 @@
  * 大世界地图：俯视的瓦片地图（星露谷那种 2D 俯视）。
  * 坐标单位是格子，x 向右、z 向下（z 就是地图上的行）。一格 16 像素。
  *
- * 一条河把地图分成南北两半：北边是赛马场、马蹄镇、赵家擂台和镇外的研究所，
+ * 一条河把地图分成南北两半：北边是赛马场、马蹄镇、擂台和镇外的研究所，
  * 南边是牧场和野原。几片地方之间隔着林子和草地，用大路和桥连起来。
  */
 import { createRng, hashSeed } from "../sim/rng";
@@ -54,7 +54,7 @@ export const POND = { x: 112, z: 88, r: 5.5 };
 export const PLAZA: Rect = { x0: 62, z0: 16, x1: 88, z1: 34 };
 /** 广场中间的喷泉，r 是挡路的半径。 */
 export const FOUNTAIN = { x: 75, z: 25, r: 2.6 };
-/** 赵家擂台：土台子上一圈沙。 */
+/** 擂台：土台子上一圈沙。 */
 export const RING = { x: 112, z: 38, r: 3.2 };
 export const DOHYO: Rect = { x0: 107, z0: 33, x1: 117, z1: 43 };
 export const TRACK = { cx: 22, cz: 25, rx: 15, rz: 11, band: 2.8 };
@@ -63,8 +63,7 @@ export const YARD_GATE = { x0: 130, x1: 133 };
 /** 研究所的院子，四周一圈栅栏，门朝南。 */
 export const LAB_YARD: Rect = { x0: 110, z0: 4, x1: 139, z1: 21 };
 export const LAB_GATE = { x0: 120, x1: 123 };
-export const LAOZHAO_SPOT = { x: 118.5, z: 35.2 };
-export const TIEDUN_SPOT = { x: 134, z: 38 };
+export const CARETAKER_SPOT = { x: 118.5, z: 35.2 };
 /** 牧场门口的鸡到处溜达的范围。 */
 export const CHICKEN_PEN: Rect = { x0: 3.5, z0: 69.4, x1: 12.5, z1: 72.6 };
 
@@ -83,7 +82,7 @@ export type BuildingKind =
   | "smithy"
   | "house"
   | "shrine"
-  | "zhao"
+  | "courtyard"
   | "booth"
   | "stand";
 
@@ -107,8 +106,8 @@ export const BUILDINGS: Building[] = [
   { id: "mill", kind: "mill", x: 48, z: 73, w: 4, d: 3 },
   // 赛马场
   { id: "stand", kind: "stand", x: 8, z: 6, w: 28, d: 5 },
-  { id: "bookie", kind: "bookie", x: 38, z: 6, w: 6, d: 4, sign: "赌马" },
-  { id: "booth", kind: "booth", x: 38, z: 18, w: 4, d: 3, sign: "报名" },
+  { id: "bookie", kind: "bookie", x: 38, z: 6, w: 6, d: 4, sign: "售票" },
+  { id: "booth", kind: "booth", x: 38, z: 18, w: 4, d: 3, sign: "赛场" },
   // 马蹄镇
   { id: "market", kind: "market", x: 63, z: 8, w: 8, d: 5, sign: "马市" },
   { id: "teahouse", kind: "teahouse", x: 74, z: 7, w: 9, d: 6, sign: "茶馆" },
@@ -119,14 +118,14 @@ export const BUILDINGS: Building[] = [
   { id: "house3", kind: "house", x: 81, z: 37, w: 7, d: 4 },
   { id: "house4", kind: "house", x: 93, z: 17, w: 6, d: 4 },
   { id: "shrine", kind: "shrine", x: 93, z: 31, w: 4, d: 3 },
-  // 赵家
-  { id: "zhao", kind: "zhao", x: 120, z: 29, w: 7, d: 4, sign: "赵" },
+  // 擂台院落
+  { id: "courtyard", kind: "courtyard", x: 120, z: 29, w: 7, d: 4, sign: "院落" },
   // 研究所
   { id: "seq", kind: "lab", x: 115, z: 7, w: 10, d: 5, sign: "测序" },
   { id: "greenhouse", kind: "greenhouse", x: 128, z: 8, w: 7, d: 4 },
 ];
 
-export type InteractId = "sleep" | "mail" | "barn" | "board" | "sequence" | "market" | "bookie" | "sumo" | "race" | "laozhao" | "circus" | "wetland" | "hill" | "coast" | "forest" | "mountain";
+export type InteractId = "sleep" | "mail" | "barn" | "board" | "sequence" | "market" | "bookie" | "sumo" | "race" | "caretaker" | "circus" | "wetland" | "hill" | "coast" | "forest" | "mountain";
 
 export interface Interactable {
   id: InteractId;
@@ -145,16 +144,16 @@ export const BOARD = { x: 23, z: 69 };
 export const MAILBOX = { x: 20.5, z: 69.5 };
 
 export const INTERACTS: Interactable[] = [
-  { id: "sleep", ...door("home"), radius: 1.6, label: "睡觉" },
-  { id: "barn", ...door("barn"), radius: 1.8, label: "配种" },
+  { id: "sleep", ...door("home"), radius: 1.6, label: "家" },
+  { id: "barn", ...door("barn"), radius: 1.8, label: "马厩" },
   { id: "mail", x: MAILBOX.x, z: MAILBOX.z + 0.8, radius: 1.1, label: "信箱" },
-  { id: "board", x: BOARD.x, z: BOARD.z + 0.8, radius: 1.3, label: "马码" },
+  { id: "board", x: BOARD.x, z: BOARD.z + 0.8, radius: 1.3, label: "告示牌" },
   { id: "sequence", ...door("seq"), radius: 1.8, label: "测序" },
   { id: "market", ...door("market"), radius: 1.8, label: "马市" },
-  { id: "bookie", ...door("bookie"), radius: 1.8, label: "下注" },
+  { id: "bookie", ...door("bookie"), radius: 1.8, label: "售票处" },
   { id: "sumo", x: RING.x, z: RING.z + RING.r + 0.8, radius: 1.8, label: "相扑" },
-  { id: "race", ...door("booth"), radius: 1.6, label: "报名" },
-  { id: "laozhao", x: LAOZHAO_SPOT.x, z: LAOZHAO_SPOT.z + 1, radius: 1.5, label: "老赵" },
+  { id: "race", ...door("booth"), radius: 1.6, label: "赛场入口" },
+  { id: "caretaker", x: CARETAKER_SPOT.x, z: CARETAKER_SPOT.z + 1, radius: 1.5, label: "看场人" },
   { id: "circus", x: 85, z: 31, radius: 2, label: "红帐篷" },
   { id: "wetland", x: 73, z: 76, radius: 2, label: "湿地" },
   { id: "hill", x: 94, z: 76, radius: 2, label: "丘陵" },
@@ -173,7 +172,7 @@ export const REGIONS: Region[] = [
   { id: "track", name: "赛马场", rect: { x0: 2, z0: 2, x1: 48, z1: 44 } },
   { id: "town", name: "马蹄镇", rect: { x0: 48, z0: 2, x1: 104, z1: 44 } },
   { id: "lab", name: "研究所", rect: { x0: 104, z0: 2, x1: 142, z1: 23 } },
-  { id: "arena", name: "赵家擂台", rect: { x0: 104, z0: 23, x1: 142, z1: 46 } },
+  { id: "arena", name: "擂台", rect: { x0: 104, z0: 23, x1: 142, z1: 46 } },
   { id: "ranch", name: "牧场", rect: { x0: 2, z0: 58, x1: 58, z1: 110 } },
   { id: "wilds", name: "野原", rect: { x0: 58, z0: 58, x1: 142, z1: 110 } },
 ];
@@ -214,7 +213,7 @@ const ROADS: Rect[] = [
   // 牧场：门前的院子路、往马场门口的小路。
   { x0: 4, z0: 69, x1: 42, z1: 71 },
   { x0: 28, z0: 71, x1: 31, z1: 78 },
-  // 研究所和赵家。
+  // 研究所和擂台院落。
   { x0: 120, z0: 21, x1: 123, z1: 24 },
   { x0: 120, z0: 12, x1: 123, z1: 21 },
   { x0: 117, z0: 27, x1: 120, z1: 33 },
@@ -591,7 +590,7 @@ function buildProps(): Prop[] {
   // 镇子东边一片果园。
   for (let z = 30; z <= 42; z += 3) for (let x = 86; x <= 99; x += 3) if (clearAt(x, z)) put("oak", x + 0.5 + ((z / 3) % 2), z + 0.9, 2);
 
-  /* ---- 赵家擂台 ---- */
+  /* ---- 擂台 ---- */
   // 台子四角的柱子（四色穗子），两边几排长凳。
   for (const [x, z, v] of [
     [DOHYO.x0 + 0.5, DOHYO.z0 + 0.7, 0],
@@ -662,6 +661,7 @@ function buildProps(): Prop[] {
   /* ---- 野原 ---- */
   // 猎人的营地：帐篷、篝火、围着坐的木头。
   put("tent", 92.5, 70.4, 0);
+  put("tent", 85, 28.5, 0);
   put("campfire", 96.5, 72.2, 0);
   put("log", 96.5, 74.2, 0);
   put("crate", 90.6, 72.0, 1);

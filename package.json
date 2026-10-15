@@ -11,10 +11,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "sim:stability": "vitest run --config vitest.stability.config.ts",
-    "sim:economy": "vitest run --config vitest.economy.config.ts",
-    "story:check": "node scripts/story-source.mjs --check",
-    "story:compile": "node scripts/story-source.mjs"
+    "sim:stability": "vitest run --config vitest.stability.config.ts"
   },
   "dependencies": {
     "@fontsource/fusion-pixel-12px-proportional-sc": "^5.3.0",

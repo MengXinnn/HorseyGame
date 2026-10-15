@@ -25,7 +25,7 @@ const ROOF: Record<BuildingKind, string> = {
   smithy: "#4a4f5a",
   house: "#6a7a8a",
   shrine: "#2f8a5a",
-  zhao: "#5a6068",
+  courtyard: "#5a6068",
   booth: "#2f7a52",
   stand: "#c9302a",
 };

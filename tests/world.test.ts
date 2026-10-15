@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HOME } from "../src/game/state";
-import { crossesFence, INTERACTS, LAOZHAO_SPOT, MAP_H, MAP_W, PADDOCK, regionAt, TIEDUN_SPOT, walkable, WILDS, YARD } from "../src/world/tiles";
+import { crossesFence, INTERACTS, CARETAKER_SPOT, MAP_H, MAP_W, PADDOCK, regionAt, walkable, WILDS, YARD } from "../src/world/tiles";
 
 /** 人站得住：和 world.ts 里一样，左右各留 0.3 格的身宽。 */
 const standable = (x: number, z: number): boolean => walkable(x - 0.3, z) && walkable(x + 0.3, z);
@@ -56,15 +56,14 @@ describe("大世界地图", () => {
     }
   });
 
-  it("牧场、野原、老赵的院子都进得去", () => {
+  it("牧场、野原、看场人的院子都进得去", () => {
     expect(near((PADDOCK.x0 + PADDOCK.x1) / 2, (PADDOCK.z0 + PADDOCK.z1) / 2, 2)).toBe(true);
     expect(near((WILDS.x0 + WILDS.x1) / 2, (WILDS.z0 + WILDS.z1) / 2, 3)).toBe(true);
     expect(near((YARD.x0 + YARD.x1) / 2, (YARD.z0 + YARD.z1) / 2, 3)).toBe(true);
   });
 
-  it("老赵和铁墩站的地方在对的区域里", () => {
-    expect(regionAt(LAOZHAO_SPOT.x, LAOZHAO_SPOT.z)?.id).toBe("arena");
-    expect(regionAt(TIEDUN_SPOT.x, TIEDUN_SPOT.z)?.id).toBe("arena");
+  it("看场人站在擂台区域内", () => {
+    expect(regionAt(CARETAKER_SPOT.x, CARETAKER_SPOT.z)?.id).toBe("arena");
   });
 
   it("研究所不在镇子里", () => {

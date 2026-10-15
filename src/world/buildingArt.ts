@@ -56,7 +56,7 @@ const SPEC: Record<BuildingKind, { wall: number; rise: number }> = {
   smithy: { wall: 30, rise: 16 },
   house: { wall: 28, rise: 18 },
   shrine: { wall: 22, rise: 16 },
-  zhao: { wall: 30, rise: 20 },
+  courtyard: { wall: 30, rise: 20 },
   booth: { wall: 18, rise: 10 },
   stand: { wall: 0, rise: 8 },
 };
@@ -926,7 +926,7 @@ function drawShrine(p: Painter): void {
   p.light(xc, oy - 10, 28, "#ffb060", "flicker");
 }
 
-function drawZhao(p: Painter): void {
+function drawCourtyard(p: Painter): void {
   const { ox, W } = p;
   const r = p.r;
   const wt = p.wallTop;
@@ -1059,7 +1059,7 @@ const DRAW: Record<BuildingKind, (p: Painter) => void> = {
   smithy: drawSmithy,
   house: drawHouse,
   shrine: drawShrine,
-  zhao: drawZhao,
+  courtyard: drawCourtyard,
   lab: drawLab,
   greenhouse: drawGreenhouse,
 };
